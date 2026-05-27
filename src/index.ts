@@ -75,7 +75,7 @@ function errorText(message: string) {
 
 const server = new McpServer({
   name: "universal-ast-mapper",
-  version: "0.5.1",
+  version: "0.5.2",
 });
 
 /* ----------------------- tool: list_supported_languages ----------------------- */
@@ -498,6 +498,21 @@ server.registerTool(
           scanned: files.length,
           graphFilePath: outAbs,
           stats: graph.stats,
+          ...(errors.length > 0 ? { errors } : {}),
+        });
+      }
+
+      // Guard against bloated inline responses for large graphs.
+      // 2000 nodes ≈ ~50–80 source files; beyond that inline JSON becomes unusable in an MCP context.
+      const INLINE_NODE_LIMIT = 2000;
+      if (graph.nodes.length > INLINE_NODE_LIMIT) {
+        return jsonText({
+          directory: rel,
+          scanned: files.length,
+          stats: graph.stats,
+          warning:
+            `Graph has ${graph.nodes.length} nodes — too large to return inline. ` +
+            `Use the outputFile parameter to write it to disk, then read specific sections with get_file_deps or get_change_impact.`,
           ...(errors.length > 0 ? { errors } : {}),
         });
       }

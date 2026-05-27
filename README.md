@@ -456,6 +456,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.5.2** | Iterative DFS in `findCircularDeps` (eliminates stack overflow on large codebases) · `build_symbol_graph` inline size guard (>2000 nodes → stats + warning) · integration test suite (`test/analysis.mjs`) |
 | **0.5.1** | Re-export tracking (`export { X } from './foo'`, barrel files) · `export const` surfaced as symbols · `const X = class {}` support · Python relative import fix · parser instance cache |
 | **0.5.0** | Call graph destructuring aliases · in-process parse cache · `.ast-map.config.json` · general validation rules (large-file, too-many-imports, god-export) |
 | **0.4.0** | `search_symbol` · `get_file_deps` · `get_top_symbols` · dead code confidence tiers · 3 new CLI commands |

@@ -88,31 +88,46 @@ export function findCircularDeps(graph: SymbolGraph): CircularDep[] {
   const cycles: CircularDep[] = [];
   const cycleKeys = new Set<string>();
 
-  function dfs(node: string, stack: string[]): void {
-    color.set(node, "gray");
-    stack.push(node);
+  // Iterative DFS — avoids call-stack overflow on large codebases (1000+ file chains).
+  // Each stack frame tracks the current node and the next neighbor index to visit.
+  type Frame = { node: string; nextIdx: number };
 
-    for (const neighbor of adj.get(node) ?? []) {
-      if (color.get(neighbor) === "gray") {
-        const start = stack.indexOf(neighbor);
-        const raw = stack.slice(start);
+  for (const startNode of adj.keys()) {
+    if (color.get(startNode) !== "white") continue;
+
+    const stack: Frame[] = [{ node: startNode, nextIdx: 0 }];
+    const path: string[] = [startNode];
+    color.set(startNode, "gray");
+
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      const neighbors = adj.get(frame.node) ?? [];
+
+      if (frame.nextIdx >= neighbors.length) {
+        stack.pop();
+        path.pop();
+        color.set(frame.node, "black");
+        continue;
+      }
+
+      const neighbor = neighbors[frame.nextIdx++];
+      const nc = color.get(neighbor);
+
+      if (nc === "gray") {
+        const start = path.indexOf(neighbor);
+        const raw = path.slice(start);
         const canonical = rotateCycle(raw);
         const key = canonical.join("→");
         if (!cycleKeys.has(key)) {
           cycleKeys.add(key);
           cycles.push({ cycle: [...canonical, canonical[0]], length: canonical.length });
         }
-      } else if (color.get(neighbor) === "white") {
-        dfs(neighbor, stack);
+      } else if (nc === "white") {
+        color.set(neighbor, "gray");
+        path.push(neighbor);
+        stack.push({ node: neighbor, nextIdx: 0 });
       }
     }
-
-    stack.pop();
-    color.set(node, "black");
-  }
-
-  for (const f of adj.keys()) {
-    if (color.get(f) === "white") dfs(f, []);
   }
 
   return cycles;
