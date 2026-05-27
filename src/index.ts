@@ -17,7 +17,6 @@ import type { SkeletonFile } from "./types.js";
 import {
   findSymbol,
   findRelatedSymbols,
-  hasDirective,
   findServerImports,
   isApiRoute,
   findMissingTryCatch,
@@ -163,7 +162,7 @@ server.registerTool(
         const successSkeletons = [];
         let totalSymbols = 0;
         for (const file of files) {
-          const fileRel = path.relative(ROOT, file);
+          const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
           try {
             const skel = await buildSkeleton(file, fileRel, opts);
             totalSymbols += skel.symbolCount;
@@ -341,8 +340,15 @@ server.registerTool(
           continue;
         }
 
-        // Next.js Rule 1: "use client" boundary
-        if (hasDirective(source, "use client")) {
+        let skel;
+        try {
+          skel = await buildSkeleton(file, fileRel, opts);
+        } catch {
+          continue;
+        }
+
+        // Next.js Rule 1: "use client" boundary (AST-based, no comment false-positives)
+        if (skel.directives?.includes("use client")) {
           for (const imp of findServerImports(source)) {
             violations.push({
               file: fileRel, rule: "client-server-boundary", severity: "error",
@@ -354,27 +360,21 @@ server.registerTool(
 
         // Next.js Rule 2: API route try/catch
         if (isApiRoute(fileRel)) {
-          try {
-            const skel = await buildSkeleton(file, fileRel, opts);
-            const sourceLines = source.split("\n");
-            for (const sym of findMissingTryCatch(skel.symbols, sourceLines)) {
-              violations.push({
-                file: fileRel, rule: "api-missing-try-catch", severity: "warning",
-                message: `API handler "${sym.name}" has no try/catch`,
-                line: sym.range.startLine,
-              });
-            }
-          } catch { /* skip */ }
+          const sourceLines = source.split("\n");
+          for (const sym of findMissingTryCatch(skel.symbols, sourceLines)) {
+            violations.push({
+              file: fileRel, rule: "api-missing-try-catch", severity: "warning",
+              message: `API handler "${sym.name}" has no try/catch`,
+              line: sym.range.startLine,
+            });
+          }
         }
 
         // General rules (Rules 3–5)
-        try {
-          const skel = await buildSkeleton(file, fileRel, opts);
-          const importCount = skel.imports?.length ?? 0;
-          for (const v of checkGeneralRules(fileRel, source, skel.symbols, importCount, thresholds)) {
-            violations.push(v);
-          }
-        } catch { /* skip */ }
+        const importCount = skel.imports?.length ?? 0;
+        for (const v of checkGeneralRules(fileRel, source, skel.symbols, importCount, thresholds)) {
+          violations.push(v);
+        }
       }
 
       const errors = violations.filter((v) => v.severity === "error").length;

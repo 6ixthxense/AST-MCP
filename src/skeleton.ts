@@ -103,8 +103,7 @@ export function collectSourceFiles(absDir: string, opts: SkeletonOptions): strin
       return;
     }
     for (const e of entries) {
-      if (e.name.startsWith(".") && e.name !== "." ) {
-        // skip dotfiles/dotdirs unless explicitly a source file
+      if (e.name.startsWith(".")) {
         if (e.isDirectory()) continue;
       }
       const full = path.join(dir, e.name);

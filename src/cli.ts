@@ -7,7 +7,7 @@ import { buildSkeleton, collectSourceFiles } from "./skeleton.js";
 import { renderHtml, renderCombinedHtml } from "./html.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
 import { supportedLanguages } from "./registry.js";
-import { findSymbol, findRelatedSymbols, hasDirective, findServerImports, isApiRoute, findMissingTryCatch, checkGeneralRules, GENERAL_RULE_DEFAULTS } from "./analysis.js";
+import { findSymbol, findRelatedSymbols, findServerImports, isApiRoute, findMissingTryCatch, checkGeneralRules, GENERAL_RULE_DEFAULTS } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols } from "./graph-analysis.js";
@@ -318,15 +318,15 @@ program
       let source: string;
       try { source = fs.readFileSync(file, "utf8"); } catch { continue; }
 
-      if (hasDirective(source, "use client")) {
+      let skel;
+      try { skel = await buildSkeleton(file, fileRel, skOpts); } catch { continue; }
+
+      if (skel.directives?.includes("use client")) {
         for (const imp of findServerImports(source)) {
           violations.push({ file: fileRel, rule: "client-server-boundary", severity: "error",
             message: `"use client" imports server-only module "${imp.label}" (${imp.module})`, line: imp.line });
         }
       }
-
-      let skel;
-      try { skel = await buildSkeleton(file, fileRel, skOpts); } catch { continue; }
 
       if (isApiRoute(fileRel)) {
         const sourceLines = source.split("\n");

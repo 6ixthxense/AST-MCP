@@ -58,25 +58,29 @@ export interface AstMapConfig {
   };
 }
 
-let _configCache: { root: string; config: AstMapConfig } | null = null;
+let _configCache: { root: string; mtime: number; config: AstMapConfig } | null = null;
 
 /**
- * Load .ast-map.config.json from the project root (or any ancestor).
- * Results are cached per root path. Returns an empty config if no file is found.
+ * Load .ast-map.config.json from the project root.
+ * Cached per root path + file mtime so live edits are picked up without restarting.
+ * Returns an empty config if no file is found.
  */
 export function loadProjectConfig(root: string): AstMapConfig {
-  if (_configCache?.root === root) return _configCache.config;
-
   const configPath = path.join(root, ".ast-map.config.json");
+  let mtime = 0;
+  try { mtime = fs.statSync(configPath).mtimeMs; } catch { /* file absent */ }
+
+  if (_configCache?.root === root && _configCache.mtime === mtime) return _configCache.config;
+
   let config: AstMapConfig = {};
   try {
     const raw = fs.readFileSync(configPath, "utf8");
     config = JSON.parse(raw) as AstMapConfig;
   } catch {
-    // No config file — use defaults
+    // No config file or parse error — use defaults
   }
 
-  _configCache = { root, config };
+  _configCache = { root, mtime, config };
   return config;
 }
 
