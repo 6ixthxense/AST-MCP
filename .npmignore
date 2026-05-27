@@ -1,0 +1,7 @@
+src/
+test/
+.ast-map/
+.ast-map.config.json
+tsconfig.json
+*.tsbuildinfo
+.gitignore

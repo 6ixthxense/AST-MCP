@@ -2,9 +2,9 @@
 
 An **MCP server + CLI tool** that turns source code into structured, machine-readable skeletons and symbol-level dependency graphs — so AI agents can reason about large codebases without reading every file.
 
-Built on [tree-sitter](https://tree-sitter.github.io/) (WASM grammars). Zero regex guessing — real AST parsing.
+Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**Supported languages:** TypeScript · TSX · JavaScript (ESM, CJS) · Python · Go
+**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go
 
 ---
 
@@ -13,91 +13,31 @@ Built on [tree-sitter](https://tree-sitter.github.io/) (WASM grammars). Zero reg
 ```bash
 npm install && npm run build
 
-# Use as CLI
-npx ast-map langs
-npx ast-map dead src/
-npx ast-map cycles src/
-
-# Or install globally
-npm link
+# CLI
 ast-map --help
+ast-map langs
+ast-map dead src/
+ast-map validate src/
+
+# Or without installing globally
+node dist/cli.js dead src/
 ```
 
 ---
 
 ## Two Ways to Use
 
-| Mode | Entry Point | Use When |
-|---|---|---|
-| **CLI** (`ast-map`) | `dist/cli.js` | Running analysis from terminal, CI scripts, quick checks |
-| **MCP Server** | `dist/index.js` | AI agents (Claude Desktop, Cursor, etc.) calling tools directly |
+| Mode | Entry Point | When to Use |
+|------|-------------|-------------|
+| **CLI** (`ast-map`) | `dist/cli.js` | Terminal, CI scripts, quick checks |
+| **MCP Server** | `dist/index.js` | AI agents (Claude, Cursor, etc.) |
 
 ---
 
-## CLI — `ast-map`
+## MCP Setup — Claude Desktop
 
-All commands default to the current working directory as root.  
-Override with `AST_MAP_ROOT=/path/to/project ast-map <command>`.
-
-### Commands
-
-```
-ast-map langs
-ast-map skeleton <path>     [-d outline|full] [--html] [--combine] [-o dir]
-ast-map symbol   <file> <name>   [-k kind] [--related]
-ast-map imports  <file>
-ast-map graph    <dir>      [-o graph.json]
-ast-map validate <path>
-ast-map dead     <dir>
-ast-map cycles   <dir>
-ast-map impact   <file> <symbol>  [--scan <dir>]
-ast-map calls    <file> <fn>      [--scan <dir>]
-```
-
-Add `--json` to any command for machine-readable output:
-
-```bash
-ast-map dead src/ --json | jq '.deadExports[] | select(.kind == "function")'
-```
-
-### Examples
-
-```bash
-# What does this file export?
-ast-map skeleton src/lib/auth.ts
-
-# Show me the source of validateSession, including types it references
-ast-map symbol src/lib/auth.ts validateSession --related
-
-# Check all imports resolve correctly
-ast-map imports src/pages/login.tsx
-
-# Find unused exports in src/
-ast-map dead src/
-
-# Any circular import loops?
-ast-map cycles src/
-
-# If I change sanitize() in utils.ts, what else breaks?
-ast-map impact src/utils.ts sanitize --scan src/
-
-# What does buildGraph() call, and who calls it?
-ast-map calls src/graph.ts buildSymbolGraph --scan src/
-
-# Build full symbol graph, save to file
-ast-map graph src/ -o graph.json
-
-# Validate Next.js architecture
-ast-map validate src/
-```
-
----
-
-## MCP Server — Connect to Claude Desktop
-
-Edit your Claude Desktop config:
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`  
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -106,14 +46,78 @@ Edit your Claude Desktop config:
       "command": "node",
       "args": ["C:\\path\\to\\AST-MCP\\dist\\index.js"],
       "env": {
-        "AST_MAP_ROOT": "C:\\path\\to\\the\\project\\you\\want\\to\\analyze"
+        "AST_MAP_ROOT": "C:\\path\\to\\your\\project"
       }
     }
   }
 }
 ```
 
-> `AST_MAP_ROOT` is the security boundary — the server only reads files inside this directory.
+> `AST_MAP_ROOT` is the security boundary — the server only reads files inside this path.
+
+---
+
+## CLI Reference
+
+All commands default to `cwd` as root. Override with `AST_MAP_ROOT=/path/to/project ast-map <cmd>`.  
+Add `--json` to any command for machine-readable output.
+
+```
+ast-map langs
+ast-map skeleton <path>            [-d outline|full] [--html] [--combine] [-o dir]
+ast-map symbol   <file> <name>     [-k kind] [--related]
+ast-map imports  <file>
+ast-map graph    <dir>             [-o graph.json]
+ast-map validate <path>            [--max-lines N] [--max-imports N] [--max-exports N]
+ast-map dead     <dir>
+ast-map cycles   <dir>
+ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
+ast-map deps     <file>            [--scan <dir>]
+ast-map top      <dir>             [-n 10]
+ast-map impact   <file> <symbol>   [--scan <dir>]
+ast-map calls    <file> <fn>       [--scan <dir>]
+```
+
+### Examples
+
+```bash
+# What does this file export?
+ast-map skeleton src/lib/auth.ts
+
+# Show source of validateSession + related types
+ast-map symbol src/lib/auth.ts validateSession --related
+
+# Find unused exports
+ast-map dead src/
+
+# Detect circular imports
+ast-map cycles src/
+
+# Check architecture + structural health
+ast-map validate src/
+ast-map validate src/ --max-lines 300 --max-imports 20
+
+# Find all symbols named like "handler" across the project
+ast-map search handler src/ --exported
+
+# What does this file import / what imports it?
+ast-map deps src/lib/auth.ts --scan src/
+
+# Top 10 most-imported symbols (God Node detector)
+ast-map top src/
+
+# Blast radius of changing sanitize()
+ast-map impact src/utils.ts sanitize --scan src/
+
+# Full call graph for a function
+ast-map calls src/graph.ts buildSymbolGraph --scan src/
+
+# Build symbol graph, write to file (large projects)
+ast-map graph src/ -o graph.json
+
+# Machine-readable output
+ast-map dead src/ --json | jq '.deadExports[] | select(.kind == "function")'
+```
 
 ---
 
@@ -125,13 +129,15 @@ Returns all supported languages and their file extensions.
 ---
 
 ### `get_skeleton_json`
-Parse a single file → return normalized JSON skeleton (no HTML). Use when the AI needs structure only.
+Parse a single source file → return normalized JSON skeleton (no HTML written).  
+Use when the AI needs file structure only.
 
 ```json
 {
   "schemaVersion": "1.1",
   "file": "src/lib/auth.ts",
   "language": "typescript",
+  "directives": ["use server"],
   "imports": [
     { "symbol": "prisma", "from": "./prisma", "isDefault": true }
   ],
@@ -142,39 +148,51 @@ Parse a single file → return normalized JSON skeleton (no HTML). Use when the 
 }
 ```
 
+**Params:** `path`, `detail` (`"outline"` | `"full"`)
+
 ---
 
 ### `generate_skeleton`
 Map a file **or directory** → compact JSON + self-contained HTML views.
 
-Options: `detail` (`outline`|`full`), `emitHtml`, `combineHtml` (single `index.html` with sidebar), `outputDir`.
+**Params:** `path`, `detail`, `emitHtml` (default `true`), `combineHtml` (single `index.html` with sidebar + search), `outputDir`
+
+---
+
+### `get_symbol_context`
+Extract exact source lines of a named symbol. Token-efficient: a 300-line file → ~40 lines.  
+Use `includeRelated: true` to also pull related types referenced in the signature.
+
+**Params:** `path`, `symbol`, `kind` (optional), `includeRelated`
 
 ---
 
 ### `resolve_imports`
-For a source file, resolve each import to its target symbol with kind, signature, and parameter list.
+Resolve every import in a file to its target symbol with kind, signature, and params.
 
 ```json
 {
-  "file": "src/app/login/page.tsx",
   "resolved": [
     {
       "symbol": "validateSession", "from": "../../lib/auth",
       "resolvedRel": "src/lib/auth.ts", "kind": "function",
       "signature": "async function validateSession(token: string): Promise<Session>",
+      "params": "(token: string)",
       "found": true, "importKind": "relative"
     }
   ]
 }
 ```
 
+**Params:** `path`
+
 ---
 
 ### `build_symbol_graph`
 Scan a directory → build a two-layer dependency graph.
 
-**Nodes:** `"file"` (one per source file) and `"symbol"` (one per function/class/type).  
-**Edges:** `"contains"` (structural hierarchy) and `"imports"` (cross-file dependency).
+- **Nodes:** `"file"` (one per source file) and `"symbol"` (one per function/class/type/const)
+- **Edges:** `"contains"` (structural hierarchy) and `"imports"` (cross-file dependency)
 
 ```json
 {
@@ -187,76 +205,60 @@ Scan a directory → build a two-layer dependency graph.
 
 Use `outputFile` to write the graph to disk for large projects.
 
----
-
-### `get_symbol_context`
-Extract exact source lines of a named symbol. Token-efficient: a 300-line file → ~40 lines of relevant code.  
-Use `includeRelated: true` to also pull related types referenced in the signature.
+**Params:** `path`, `detail`, `outputFile`
 
 ---
 
-### `validate_architecture`
-Scan for Next.js App Router violations:
-- `client-server-boundary` — `"use client"` file importing a server-only module
-- `api-missing-try-catch` — API route handler with no try/catch
+### `find_dead_code`
+Scan a directory → find exported symbols with zero incoming import edges.
+
+Returns two confidence tiers:
+- `"high"` — functions, classes, consts (very likely unused)
+- `"low"` — interfaces, types, enums (may be used as type annotations only)
+
+> Note: framework entry-points (Next.js pages, route handlers) are technically "dead" inside the graph — review before deleting.
+
+**Params:** `path`, `detail`
 
 ---
 
-### `find_dead_code` ✦ New in v0.3
-Scan a directory → find exported symbols with **zero incoming import edges**.  
-These are candidates for deletion (note: framework entry-points like Next.js page exports are technically dead within the graph).
+### `find_circular_deps`
+Detect circular import chains (A → B → C → A) using DFS.  
+Each cycle is canonicalised to avoid duplicates.
 
 ```json
 {
-  "deadExportCount": 3,
-  "deadExports": [
-    { "file": "src/utils/format.ts", "symbol": "formatDate", "kind": "function" }
-  ]
-}
-```
-
----
-
-### `find_circular_deps` ✦ New in v0.3
-Detect circular import chains using DFS. Each cycle is canonicalised to avoid duplicates.
-
-```json
-{
-  "cycleCount": 1,
   "cycles": [
     { "cycle": ["src/a.ts", "src/b.ts", "src/c.ts", "src/a.ts"], "length": 3 }
   ]
 }
 ```
 
+**Params:** `path`
+
 ---
 
-### `get_change_impact` ✦ New in v0.3
-Given a file + symbol, reverse-traverse the import graph to compute **blast radius**: which files/symbols break if this symbol changes.
+### `get_change_impact`
+Given a file + symbol, reverse-traverse the import graph to compute **blast radius**.
 
 ```json
 {
   "targetNodeId": "src/lib/auth.ts::validateSession",
-  "direct": [
-    { "file": "src/app/login/page.tsx", "symbol": "validateSession" }
-  ],
-  "transitive": [
-    { "file": "src/middleware.ts" }
-  ],
+  "direct": [{ "file": "src/app/login/page.tsx", "symbol": "validateSession" }],
+  "transitive": [{ "file": "src/middleware.ts" }],
   "totalFiles": 5
 }
 ```
 
+**Params:** `path`, `symbol`, `scanDir`
+
 ---
 
-### `get_call_graph` ✦ New in v0.3
-Parse a function body with tree-sitter → extract every call expression, resolve callees via the import map, and find which files import the function (calledBy). Supports TypeScript, JavaScript, Python, and Go.
+### `get_call_graph`
+Parse a function body → extract every call expression, resolve callees via the import map, find reverse importers.
 
 ```json
 {
-  "file": "src/lib/auth.ts",
-  "function": "validateSession",
-  "functionRange": { "startLine": 12, "endLine": 34 },
   "calls": [
     { "callee": "prisma.session.findUnique", "line": 15, "calleeFileRel": "src/lib/prisma.ts" },
     { "callee": "jwt.verify", "line": 20, "isExternal": true, "calleeFileRel": "jsonwebtoken" }
@@ -267,44 +269,141 @@ Parse a function body with tree-sitter → extract every call expression, resolv
 }
 ```
 
+Supports TypeScript, JavaScript, Python, Go.  
+Handles destructured aliases: `const { sign } = jwt` → `sign` correctly resolves to `jsonwebtoken`.
+
+**Params:** `path`, `function`, `scanDir`
+
 ---
 
-## Power Prompts (MCP)
+### `search_symbol`
+Find symbols by name across all source files in a directory.
+
+**Params:** `path`, `name`, `matchType` (`"contains"` | `"exact"` | `"regex"`), `kind`, `exportedOnly`
+
+---
+
+### `get_file_deps`
+For a single file, show what it imports and what imports it (with symbol names).  
+More focused than `build_symbol_graph` — use for quick dependency lookup.
+
+**Params:** `path`, `scanDir`
+
+---
+
+### `validate_architecture`
+Scan for architecture violations across two rule sets.
+
+**Next.js App Router rules:**
+- `client-server-boundary` — `"use client"` file importing a server-only module *(error)*
+- `api-missing-try-catch` — API route handler with no try/catch *(warning)*
+
+**General structural rules (any project):**
+- `large-file` — file exceeds `maxLines` (default 500) *(warning)*
+- `too-many-imports` — file has more than `maxImports` imports (default 15) *(warning)*
+- `god-export` — file exports more than `maxExports` symbols (default 10) *(warning)*
+
+Thresholds can be set per-call or in `.ast-map.config.json`.
+
+**Params:** `path`, `maxLines`, `maxImports`, `maxExports`
+
+---
+
+### `get_top_symbols`
+Return the N most-imported symbols — your codebase's "God Nodes" where a breaking change has maximum blast radius.
+
+**Params:** `path`, `limit` (default 10)
+
+---
+
+## Project Config — `.ast-map.config.json`
+
+Place in your project root. All fields optional.
+
+```json
+{
+  "ignore": ["dist", "coverage", ".turbo"],
+  "maxFileBytes": 500000,
+  "outputDir": ".ast-map",
+  "rules": {
+    "large-file":       { "maxLines": 400 },
+    "too-many-imports": { "maxImports": 20 },
+    "god-export":       { "maxExports": 15 }
+  }
+}
+```
+
+The config is read live — changes take effect on the next call without restarting the MCP server.
+
+---
+
+## Power Prompts
 
 ### Full Architecture Audit
-
 ```
-Scan src/ with build_symbol_graph, then:
-1. Find the 5 most-imported symbols (God Nodes)
-2. Check for circular dependencies with find_circular_deps
-3. Validate Next.js architecture with validate_architecture
-4. Pick the highest-impact issue and show me the source with get_symbol_context
+Use build_symbol_graph on src/, then:
+1. get_top_symbols — find the 5 God Nodes
+2. find_circular_deps — any cycles?
+3. validate_architecture — architecture violations + structural warnings
+4. For the worst issue, show source with get_symbol_context
 ```
 
 ### Safe Refactor Checklist
+```
+Before refactoring [functionName] in [file]:
+1. get_change_impact — who depends on it?
+2. get_call_graph — what does it call?
+3. get_symbol_context with includeRelated=true — show me the full signature + types
+4. Summarise what needs to change alongside the refactor
+```
 
+### Dead Code Cleanup
 ```
-Before I refactor [functionName] in [file]:
-1. Run get_change_impact on src/[file] symbol=[functionName] --scan src/
-2. List all direct and transitive dependents
-3. Run get_call_graph to show what it currently calls
-4. Summarise what I need to update alongside the refactor
+Run find_dead_code on src/.
+Show high-confidence results grouped by file.
+For each candidate, use get_change_impact to confirm it's truly unreachable,
+then show the source with get_symbol_context so I can verify before deleting.
 ```
+
+---
+
+## Adding a Language
+
+1. Pick a grammar from `tree-sitter-wasms` (~36 bundled grammars).
+2. Write `src/extractors/<lang>.ts` — export `extract()` and `extractImports()`.
+3. Add one entry to `src/registry.ts`.
+
+No changes to the core pipeline or any MCP tool.
 
 ---
 
 ## Schema Reference
 
+### `SymbolNode`
+```typescript
+interface SymbolNode {
+  name: string
+  kind: "class" | "interface" | "struct" | "function" | "method"
+       | "type" | "enum" | "const" | "var" | "field"
+  visibility: "public" | "private"
+  exported?: boolean
+  signature?: string          // full detail only
+  doc?: string                // full detail only
+  range: { startLine: number; endLine: number }
+  children: SymbolNode[]
+}
+```
+
 ### `ImportRef`
 ```typescript
 interface ImportRef {
-  symbol: string              // imported name, or "*" for namespace/side-effect
+  symbol: string              // imported name, or "*"
   from: string                // module specifier as written in source
   alias?: string              // import { Foo as Bar } → "Bar"
-  isTypeOnly?: boolean        // import type { ... }
-  isNamespaceImport?: boolean // import * as Foo
-  isDefault?: boolean         // import Foo from ...
-  isSideEffect?: boolean      // import "module"
+  isTypeOnly?: boolean
+  isNamespaceImport?: boolean
+  isDefault?: boolean
+  isSideEffect?: boolean
 }
 ```
 
@@ -314,7 +413,7 @@ interface SkeletonFile {
   schemaVersion: "1.1"
   file: string                // relative path, forward-slashed
   language: string
-  generatedAt: string         // ISO timestamp
+  generatedAt: string
   parser: { engine: "tree-sitter"; grammar: string }
   symbolCount: number
   directives?: string[]       // e.g. ["use client"]
@@ -329,40 +428,37 @@ interface SkeletonFile {
 
 ```
 src/
-├── index.ts            — MCP server + all tool registrations
-├── cli.ts              — ast-map CLI binary (10 commands)
+├── index.ts            — MCP server + all 14 tool registrations
+├── cli.ts              — ast-map CLI (13 commands)
 ├── types.ts            — SkeletonFile, SymbolNode, ImportRef
-├── config.ts           — SkeletonOptions, resolveOptions()
-├── registry.ts         — Language detection + extractor registry
-├── parser.ts           — tree-sitter WASM loader + node helpers
-├── skeleton.ts         — buildSkeleton(), collectSourceFiles()
+├── config.ts           — SkeletonOptions, resolveOptions(), loadProjectConfig()
+├── registry.ts         — language detection + extractor registry
+├── parser.ts           — tree-sitter WASM loader + AST node helpers
+├── skeleton.ts         — buildSkeleton(), collectSourceFiles() + parse cache
 ├── resolver.ts         — resolveImportPath(), resolveFileImports()
-├── graph.ts            — buildSymbolGraph(), GraphNode, GraphEdge
-├── graph-analysis.ts   — findDeadExports(), findCircularDeps(), getChangeImpact()
-├── callgraph.ts        — buildCallGraph() with AST-level call extraction
-├── analysis.ts         — findSymbol(), architecture validation helpers
+├── graph.ts            — buildSymbolGraph()
+├── graph-analysis.ts   — findDeadExports(), findCircularDeps(), getChangeImpact(),
+│                         getFileDeps(), getTopSymbols()
+├── callgraph.ts        — buildCallGraph() — AST-level call extraction
+├── analysis.ts         — findSymbol(), validate helpers, checkGeneralRules()
 ├── html.ts             — renderHtml(), renderCombinedHtml()
+├── search.ts           — searchSymbols()
 └── extractors/
     ├── common.ts       — makeSymbol(), toOutline()
-    ├── typescript.ts   — extractTypeScript(), extractImportsTS()
-    ├── python.ts       — extractPython(), extractImportsPython()
-    └── go.ts           — extractGo(), extractImportsGo()
+    ├── typescript.ts   — TS/JS/TSX: symbols + imports + re-exports
+    ├── python.ts       — Python: symbols + relative import resolution
+    └── go.ts           — Go: symbols + imports
 ```
-
-## Adding a Language
-
-1. Pick a grammar from `tree-sitter-wasms` (~36 bundled).
-2. Write `src/extractors/<lang>.ts` exporting `extract()` and `extractImports()`.
-3. Register one line in `src/registry.ts`.
-
-No changes to the core pipeline or any tool.
 
 ---
 
 ## Changelog
 
 | Version | What changed |
-|---|---|
+|---------|--------------|
+| **0.5.1** | Re-export tracking (`export { X } from './foo'`, barrel files) · `export const` surfaced as symbols · `const X = class {}` support · Python relative import fix · parser instance cache |
+| **0.5.0** | Call graph destructuring aliases · in-process parse cache · `.ast-map.config.json` · general validation rules (large-file, too-many-imports, god-export) |
+| **0.4.0** | `search_symbol` · `get_file_deps` · `get_top_symbols` · dead code confidence tiers · 3 new CLI commands |
 | **0.3.0** | `ast-map` CLI · `find_dead_code` · `find_circular_deps` · `get_change_impact` · `get_call_graph` |
-| **0.2.0** (v1.1) | Import extraction · `resolve_imports` · `build_symbol_graph` |
-| **0.1.0** | Initial release: `get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture` |
+| **0.2.0** | Import extraction · `resolve_imports` · `build_symbol_graph` |
+| **0.1.0** | `get_skeleton_json` · `generate_skeleton` · `get_symbol_context` · `validate_architecture` |
