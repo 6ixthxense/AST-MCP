@@ -643,7 +643,7 @@ program
 program
   .name("ast-map")
   .description("CLI for universal-ast-mapper — structural code analysis tools")
-  .version("0.5.2")
+  .version("0.5.3")
   .addHelpText("after", `
 ${bold("Examples:")}
   ast-map langs
