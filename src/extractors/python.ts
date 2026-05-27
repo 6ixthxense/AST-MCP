@@ -94,9 +94,22 @@ function parseSimpleImport(node: TSNode, out: ImportRef[]): void {
   }
 }
 
+/**
+ * Convert Python import path to a JS-style relative path.
+ * ".models" → "./models", "..utils" → "../utils", "os" → "os" (external).
+ */
+function pythonFromPath(raw: string): string {
+  const m = raw.match(/^(\.+)(.*)/);
+  if (!m) return raw; // absolute/external import
+  const dotCount = m[1].length;
+  const rest = m[2]; // module name after the dots, e.g. "models" or ""
+  const upDirs = dotCount === 1 ? "." : Array(dotCount - 1).fill("..").join("/");
+  return rest ? `${upDirs}/${rest.replace(/\./g, "/")}` : upDirs;
+}
+
 function parseFromImport(node: TSNode, out: ImportRef[]): void {
   const moduleNode = node.childForFieldName("module_name");
-  const from = moduleNode ? moduleNode.text : ".";
+  const from = moduleNode ? pythonFromPath(moduleNode.text) : ".";
 
   for (let i = 0; i < node.namedChildCount; i++) {
     const c = node.namedChild(i);

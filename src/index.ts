@@ -75,7 +75,7 @@ function errorText(message: string) {
 
 const server = new McpServer({
   name: "universal-ast-mapper",
-  version: "0.5.0",
+  version: "0.5.1",
 });
 
 /* ----------------------- tool: list_supported_languages ----------------------- */

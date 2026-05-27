@@ -35,8 +35,11 @@ const P = Parser as unknown as {
   Language: { load(pathOrBytes: string): Promise<unknown> };
 };
 
+type TSParser = { setLanguage(l: unknown): void; parse(s: string): { rootNode: TSNode } };
+
 let initPromise: Promise<void> | null = null;
 const languageCache = new Map<string, unknown>();
+const parserCache = new Map<string, TSParser>();
 
 function pkgDir(spec: string): string {
   return path.dirname(require.resolve(spec));
@@ -71,8 +74,12 @@ async function loadLanguage(grammar: string): Promise<unknown> {
 /** Parse source code with the given grammar and return the root node. */
 export async function parseSource(grammar: string, source: string): Promise<TSNode> {
   const lang = await loadLanguage(grammar);
-  const parser = new P();
-  parser.setLanguage(lang);
+  let parser = parserCache.get(grammar);
+  if (!parser) {
+    parser = new P();
+    parser.setLanguage(lang);
+    parserCache.set(grammar, parser);
+  }
   return parser.parse(source).rootNode;
 }
 

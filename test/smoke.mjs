@@ -53,6 +53,9 @@ const ts = await run("sample.ts", [
   "method:find",
   "function:helper",
   "function:multiply",
+  "function:double",
+  "const:DEFAULT_TIMEOUT",
+  "class:BaseRepo",
   "type:ID",
   "enum:Color",
 ]);
@@ -61,6 +64,19 @@ const userService = ts.symbols.find((s) => s.name === "UserService");
 check("UserService is exported", userService?.exported === true);
 const evict = userService?.children.find((c) => c.name === "evict");
 check("evict is private", evict?.visibility === "private");
+const timeout = ts.symbols.find((s) => s.name === "DEFAULT_TIMEOUT");
+check("DEFAULT_TIMEOUT is exported const", timeout?.exported === true && timeout?.kind === "const");
+const dbl = ts.symbols.find((s) => s.name === "double");
+check("double is exported", dbl?.exported === true);
+const multiply = ts.symbols.find((s) => s.name === "multiply");
+check("multiply is NOT exported", multiply?.exported === false);
+
+// Barrel / re-export: export { X } from './foo' should appear as imports
+const barrel = await run("barrel.ts", []);
+check("barrel has imports", (barrel.imports?.length ?? 0) > 0);
+check("barrel imports UserService", barrel.imports?.some(i => i.symbol === "UserService") ?? false);
+check("barrel imports DEFAULT_TIMEOUT (aliased)", barrel.imports?.some(i => i.symbol === "DEFAULT_TIMEOUT") ?? false);
+check("barrel has namespace re-export (*)", barrel.imports?.some(i => i.symbol === "*") ?? false);
 
 await run("sample.py", [
   "class:InventoryService",

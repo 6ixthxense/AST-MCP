@@ -166,19 +166,42 @@ function fromVariableDeclaration(node: TSNode, exported: boolean): SymbolNode[] 
     const value = decl.childForFieldName("value");
     const name = nameOf(decl);
     if (!name) continue;
+
     if (value && (value.type === "arrow_function" || value.type === "function" || value.type === "function_expression")) {
       const body = value.childForFieldName("body");
-      out.push(
-        makeSymbol({
-          name,
-          kind: "function",
-          node: decl,
-          rawKind: `${node.type}>arrow`,
-          signature: headerSignature(value, body),
-          exported,
-          doc: leadingComment(node),
-        }),
-      );
+      out.push(makeSymbol({
+        name,
+        kind: "function",
+        node: decl,
+        rawKind: `${node.type}>arrow`,
+        signature: headerSignature(value, body),
+        exported,
+        doc: leadingComment(node),
+      }));
+    } else if (value && (value.type === "class_expression" || value.type === "class")) {
+      // const MyClass = class { ... }
+      const body = value.childForFieldName("body");
+      const children = body ? collect(namedChildren(body), false) : [];
+      out.push(makeSymbol({
+        name,
+        kind: "class",
+        node: decl,
+        rawKind: `${node.type}>class`,
+        exported,
+        doc: leadingComment(node),
+        children,
+      }));
+    } else if (exported && value) {
+      // export const FOO = <any non-function value> — track for dead code detection
+      out.push(makeSymbol({
+        name,
+        kind: "const",
+        node: decl,
+        rawKind: `${node.type}>const`,
+        signature: decl.text.replace(/\s+/g, " ").trim().slice(0, 120),
+        exported: true,
+        doc: leadingComment(node),
+      }));
     }
   }
   return out;
@@ -190,8 +213,41 @@ export function extractImportsTS(root: TSNode, _source: string): ImportRef[] {
   const imports: ImportRef[] = [];
   for (const child of namedChildren(root)) {
     if (child.type === "import_statement") parseImportStatement(child, imports);
+    // Re-exports: `export { X } from './foo'` or `export * from './foo'`
+    else if (child.type === "export_statement") parseReExportStatement(child, imports);
   }
   return imports;
+}
+
+function parseReExportStatement(node: TSNode, out: ImportRef[]): void {
+  const source = extractModulePath(node.text);
+  if (!source) return; // no `from` clause — local re-export, not an import
+
+  const isTypeOnly = /^export\s+type\b/.test(node.text);
+
+  // export * from './foo'  or  export * as Foo from './foo'
+  if (/^export\s+\*/.test(node.text)) {
+    out.push({ symbol: "*", from: source, isNamespaceImport: true });
+    return;
+  }
+
+  // export { X, Y as Z } from './foo'
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (!c || c.type !== "export_clause") continue;
+    for (let j = 0; j < c.namedChildCount; j++) {
+      const spec = c.namedChild(j);
+      if (!spec || spec.type !== "export_specifier") continue;
+      const nameNode = spec.childForFieldName("name");
+      const aliasNode = spec.childForFieldName("alias");
+      if (nameNode) {
+        const imp: ImportRef = { symbol: nameNode.text, from: source };
+        if (aliasNode) imp.alias = aliasNode.text;
+        if (isTypeOnly) imp.isTypeOnly = true;
+        out.push(imp);
+      }
+    }
+  }
 }
 
 function parseImportStatement(node: TSNode, out: ImportRef[]): void {

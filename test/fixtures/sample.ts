@@ -20,7 +20,20 @@ export function helper(x: number): number {
   return x * 2;
 }
 
+// Non-exported arrow — captured as function with exported=false
 const multiply = (a: number, b: number): number => a * b;
+
+// Exported arrow
+export const double = (x: number): number => x * 2;
+
+// Exported plain constant — should appear as const symbol
+export const DEFAULT_TIMEOUT = 5000;
+
+// Class expression
+export const BaseRepo = class implements Repository {
+  find(id: string): string { return id; }
+  save(_: string): void {}
+};
 
 export type ID = string | number;
 
