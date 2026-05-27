@@ -107,3 +107,78 @@ export function findMissingTryCatch(symbols: SymbolNode[], sourceLines: string[]
   }
   return missing;
 }
+
+// ─── General-purpose validation rules ────────────────────────────────────────
+// These apply to any codebase, not just Next.js.
+
+export interface GeneralViolation {
+  file: string;
+  rule: "large-file" | "too-many-imports" | "god-export";
+  severity: "warning";
+  message: string;
+  value: number;
+  threshold: number;
+}
+
+export interface GeneralRuleThresholds {
+  largeFileLines: number;
+  tooManyImports: number;
+  godExportCount: number;
+}
+
+export const GENERAL_RULE_DEFAULTS: GeneralRuleThresholds = {
+  largeFileLines: 500,
+  tooManyImports: 15,
+  godExportCount: 10,
+};
+
+/**
+ * Run general-purpose structural rules against a source file.
+ * Returns violations for any threshold exceeded.
+ */
+export function checkGeneralRules(
+  fileRel: string,
+  source: string,
+  symbols: SymbolNode[],
+  importCount: number,
+  thresholds: GeneralRuleThresholds = GENERAL_RULE_DEFAULTS,
+): GeneralViolation[] {
+  const violations: GeneralViolation[] = [];
+  const lineCount = source.split("\n").length;
+
+  if (lineCount > thresholds.largeFileLines) {
+    violations.push({
+      file: fileRel,
+      rule: "large-file",
+      severity: "warning",
+      message: `File has ${lineCount} lines (threshold: ${thresholds.largeFileLines}) — consider splitting`,
+      value: lineCount,
+      threshold: thresholds.largeFileLines,
+    });
+  }
+
+  if (importCount > thresholds.tooManyImports) {
+    violations.push({
+      file: fileRel,
+      rule: "too-many-imports",
+      severity: "warning",
+      message: `File has ${importCount} imports (threshold: ${thresholds.tooManyImports}) — high coupling`,
+      value: importCount,
+      threshold: thresholds.tooManyImports,
+    });
+  }
+
+  const exportedCount = symbols.filter((s) => s.exported).length;
+  if (exportedCount > thresholds.godExportCount) {
+    violations.push({
+      file: fileRel,
+      rule: "god-export",
+      severity: "warning",
+      message: `File exports ${exportedCount} symbols (threshold: ${thresholds.godExportCount}) — potential God File`,
+      value: exportedCount,
+      threshold: thresholds.godExportCount,
+    });
+  }
+
+  return violations;
+}

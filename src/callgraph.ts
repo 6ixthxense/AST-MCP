@@ -127,6 +127,61 @@ function findFunctionNode(root: TSNode, name: string): TSNode | null {
   return walk(root);
 }
 
+// ─── Destructuring alias tracker ─────────────────────────────────────────────
+
+/**
+ * Walk a subtree and collect variable destructuring patterns where the source
+ * is a known import. Handles:
+ *   const { sign, verify } = jwt;          → sign/verify → (jwt's source)
+ *   const { readFile: rf } = fs;           → rf → (fs's source)
+ *   let { a, b } = someNamespace.nested;   → a/b → (someNamespace's source)
+ *
+ * Returns a map of localAlias → moduleSpecifier (same format as importMap).
+ */
+function collectDestructuredAliases(
+  node: TSNode,
+  importMap: Map<string, string>,
+): Map<string, string> {
+  const aliases = new Map<string, string>();
+
+  function walk(n: TSNode): void {
+    if (n.type === "variable_declarator") {
+      const nameNode = n.childForFieldName("name");
+      const valueNode = n.childForFieldName("value");
+      if (nameNode && valueNode && nameNode.type === "object_pattern") {
+        // value might be `jwt` or `jwt.utils` — base is the first identifier
+        const baseName = valueNode.text.split(".")[0];
+        const origin = importMap.get(baseName) ?? aliases.get(baseName);
+        if (origin) {
+          for (let i = 0; i < nameNode.namedChildCount; i++) {
+            const prop = nameNode.namedChild(i);
+            if (!prop) continue;
+            // { sign } — shorthand
+            if (
+              prop.type === "shorthand_property_identifier_pattern" ||
+              prop.type === "shorthand_property_identifier"
+            ) {
+              aliases.set(prop.text, origin);
+            }
+            // { readFile: rf } — renamed
+            if (prop.type === "pair_pattern") {
+              const val = prop.childForFieldName("value");
+              if (val) aliases.set(val.text, origin);
+            }
+          }
+        }
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) {
+      const c = n.namedChild(i);
+      if (c) walk(c);
+    }
+  }
+
+  walk(node);
+  return aliases;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -176,6 +231,10 @@ export async function buildCallGraph(
 
   const localNames = new Set(skel.symbols.map((s) => s.name));
 
+  // Track destructured aliases within the function body
+  // e.g. const { sign } = jwt  →  sign maps to the same source as jwt
+  const destructuredAliases = collectDestructuredAliases(body, importMap);
+
   // Deduplicate by callee+line and resolve origins
   const calls: CallRef[] = [];
   const seen = new Set<string>();
@@ -185,7 +244,8 @@ export async function buildCallGraph(
     seen.add(key);
 
     const baseName = callee.split(".")[0];
-    const importFrom = importMap.get(baseName);
+    // Check import map first, then destructured aliases
+    const importFrom = importMap.get(baseName) ?? destructuredAliases.get(baseName);
     const call: CallRef = { callee, line };
 
     if (importFrom) {

@@ -9,6 +9,30 @@ import { countSymbols, toOutline } from "./extractors/common.js";
 export const SCHEMA_VERSION = "1.1";
 export const GRAMMAR_SOURCE = "tree-sitter-wasms@0.1.13";
 
+// ─── In-process parse cache ───────────────────────────────────────────────────
+// Keyed by "<absPath>|<detail>". Invalidated whenever the file's mtime changes.
+// Survives for the lifetime of the process (MCP server) or a single CLI run.
+interface CacheEntry { mtime: number; result: SkeletonFile }
+const parseCache = new Map<string, CacheEntry>();
+
+function cacheKey(absPath: string, detail: string) { return `${absPath}|${detail}`; }
+
+function getCached(absPath: string, detail: string): SkeletonFile | null {
+  try {
+    const entry = parseCache.get(cacheKey(absPath, detail));
+    if (!entry) return null;
+    const mtime = fs.statSync(absPath).mtimeMs;
+    return entry.mtime === mtime ? entry.result : null;
+  } catch { return null; }
+}
+
+function setCached(absPath: string, detail: string, result: SkeletonFile): void {
+  try {
+    const mtime = fs.statSync(absPath).mtimeMs;
+    parseCache.set(cacheKey(absPath, detail), { mtime, result });
+  } catch { /* skip if stat fails */ }
+}
+
 export class UnsupportedLanguageError extends Error {
   constructor(public readonly ext: string) {
     super(`Unsupported file type "${ext}". Supported: ${supportedExtensions().join(", ")}`);
@@ -37,6 +61,10 @@ export async function buildSkeleton(
     );
   }
 
+  // Return cached result if file hasn't changed
+  const cached = getCached(absPath, opts.detail);
+  if (cached) return cached;
+
   const source = fs.readFileSync(absPath, "utf8");
   const root = await parseSource(entry.grammar, source);
   let symbols = entry.extract(root, source);
@@ -45,7 +73,7 @@ export async function buildSkeleton(
   const directives = entry.extractDirectives ? entry.extractDirectives(root, source) : [];
   const imports = entry.extractImports ? entry.extractImports(root, source) : [];
 
-  return {
+  const result: SkeletonFile = {
     schemaVersion: SCHEMA_VERSION,
     file: relPath.split(path.sep).join("/"),
     language: entry.language,
@@ -56,6 +84,9 @@ export async function buildSkeleton(
     ...(imports.length > 0 ? { imports } : {}),
     symbols,
   };
+
+  setCached(absPath, opts.detail, result);
+  return result;
 }
 
 /** Recursively collect supported source files under a directory. */

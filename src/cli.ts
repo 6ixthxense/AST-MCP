@@ -5,9 +5,9 @@ import fs from "node:fs";
 
 import { buildSkeleton, collectSourceFiles } from "./skeleton.js";
 import { renderHtml, renderCombinedHtml } from "./html.js";
-import { resolveOptions } from "./config.js";
+import { resolveOptions, loadProjectConfig } from "./config.js";
 import { supportedLanguages } from "./registry.js";
-import { findSymbol, findRelatedSymbols, hasDirective, findServerImports, isApiRoute, findMissingTryCatch } from "./analysis.js";
+import { findSymbol, findRelatedSymbols, hasDirective, findServerImports, isApiRoute, findMissingTryCatch, checkGeneralRules, GENERAL_RULE_DEFAULTS } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols } from "./graph-analysis.js";
@@ -286,13 +286,29 @@ program
 
 program
   .command("validate <path>")
-  .description("Scan for Next.js App Router architecture violations")
+  .description("Scan for architecture violations (boundary rules + general structural rules)")
+  .option("--max-lines <n>", `Flag files over N lines (default: ${GENERAL_RULE_DEFAULTS.largeFileLines})`)
+  .option("--max-imports <n>", `Flag files with over N imports (default: ${GENERAL_RULE_DEFAULTS.tooManyImports})`)
+  .option("--max-exports <n>", `Flag files with over N exports (default: ${GENERAL_RULE_DEFAULTS.godExportCount})`)
   .option("--json", "Output as JSON")
-  .action(async (inputPath: string, opts: { json?: boolean }) => {
+  .action(async (inputPath: string, opts: { maxLines?: string; maxImports?: string; maxExports?: string; json?: boolean }) => {
     const { abs } = resolveArg(inputPath);
-    const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+    const projectConfig = loadProjectConfig(ROOT);
+    const skOpts = resolveOptions({ detail: "full", emitHtml: false }, projectConfig);
     const stat = fs.statSync(abs);
     const filesToCheck = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+
+    const thresholds = {
+      largeFileLines: opts.maxLines
+        ? parseInt(opts.maxLines, 10)
+        : (projectConfig.rules?.["large-file"]?.maxLines ?? GENERAL_RULE_DEFAULTS.largeFileLines),
+      tooManyImports: opts.maxImports
+        ? parseInt(opts.maxImports, 10)
+        : (projectConfig.rules?.["too-many-imports"]?.maxImports ?? GENERAL_RULE_DEFAULTS.tooManyImports),
+      godExportCount: opts.maxExports
+        ? parseInt(opts.maxExports, 10)
+        : (projectConfig.rules?.["god-export"]?.maxExports ?? GENERAL_RULE_DEFAULTS.godExportCount),
+    };
 
     interface Violation { file: string; rule: string; severity: "error" | "warning"; message: string; line?: number }
     const violations: Violation[] = [];
@@ -309,15 +325,20 @@ program
         }
       }
 
+      let skel;
+      try { skel = await buildSkeleton(file, fileRel, skOpts); } catch { continue; }
+
       if (isApiRoute(fileRel)) {
-        try {
-          const skel = await buildSkeleton(file, fileRel, skOpts);
-          const sourceLines = source.split("\n");
-          for (const sym of findMissingTryCatch(skel.symbols, sourceLines)) {
-            violations.push({ file: fileRel, rule: "api-missing-try-catch", severity: "warning",
-              message: `API handler "${sym.name}" has no try/catch`, line: sym.range.startLine });
-          }
-        } catch { /* skip */ }
+        const sourceLines = source.split("\n");
+        for (const sym of findMissingTryCatch(skel.symbols, sourceLines)) {
+          violations.push({ file: fileRel, rule: "api-missing-try-catch", severity: "warning",
+            message: `API handler "${sym.name}" has no try/catch`, line: sym.range.startLine });
+        }
+      }
+
+      const importCount = skel.imports?.length ?? 0;
+      for (const v of checkGeneralRules(fileRel, source, skel.symbols, importCount, thresholds)) {
+        violations.push(v);
       }
     }
 
@@ -621,7 +642,7 @@ program
 program
   .name("ast-map")
   .description("CLI for universal-ast-mapper — structural code analysis tools")
-  .version("0.4.0")
+  .version("0.5.0")
   .addHelpText("after", `
 ${bold("Examples:")}
   ast-map langs

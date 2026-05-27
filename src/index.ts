@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { resolveOptions, type SkeletonOptions } from "./config.js";
+import { resolveOptions, loadProjectConfig, type SkeletonOptions } from "./config.js";
 import {
   buildSkeleton,
   collectSourceFiles,
@@ -21,6 +21,9 @@ import {
   findServerImports,
   isApiRoute,
   findMissingTryCatch,
+  checkGeneralRules,
+  GENERAL_RULE_DEFAULTS,
+  type GeneralRuleThresholds,
 } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
@@ -73,7 +76,7 @@ function errorText(message: string) {
 
 const server = new McpServer({
   name: "universal-ast-mapper",
-  version: "0.4.0",
+  version: "0.5.0",
 });
 
 /* ----------------------- tool: list_supported_languages ----------------------- */
@@ -279,31 +282,45 @@ server.registerTool(
 server.registerTool(
   "validate_architecture",
   {
-    title: "Validate Next.js App Router architecture",
+    title: "Validate architecture — Next.js + general rules",
     description:
-      "Scan files for Next.js App Router architecture violations:\n" +
-      "  (1) client-server-boundary — 'use client' components importing server-only modules " +
-      "(prisma, next/headers, next/cookies, lib/auth, lib/auditLog, lib/apiAuth, server-only).\n" +
-      "  (2) api-missing-try-catch — API route handlers (GET/POST/PUT/DELETE/PATCH) with no try/catch, " +
-      "causing unhandled errors to leak as unstructured 500 responses.\n" +
-      "Returns structured violations with file paths, line numbers, and severity.",
+      "Scan files for architecture violations. Two rule sets run together:\n\n" +
+      "Next.js App Router rules:\n" +
+      "  (1) client-server-boundary — 'use client' components importing server-only modules.\n" +
+      "  (2) api-missing-try-catch — API route handlers with no try/catch.\n\n" +
+      "General rules (any project):\n" +
+      "  (3) large-file — files exceeding maxLines (default 500).\n" +
+      "  (4) too-many-imports — files with more than maxImports imports (default 15).\n" +
+      "  (5) god-export — files exporting more than maxExports symbols (default 10).\n\n" +
+      "Thresholds can be overridden per-call or set globally in .ast-map.config.json.",
     inputSchema: {
       path: z
         .string()
         .describe(
           "File or directory to scan (relative to root or absolute within it). Use '.' to scan the whole project.",
         ),
+      maxLines: z.number().int().optional().describe("Override large-file threshold (default 500)."),
+      maxImports: z.number().int().optional().describe("Override too-many-imports threshold (default 15)."),
+      maxExports: z.number().int().optional().describe("Override god-export threshold (default 10)."),
     },
   },
-  async ({ path: input }) => {
+  async ({ path: input, maxLines, maxImports, maxExports }) => {
     try {
       const { abs } = resolveInRoot(input);
-      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const projectConfig = loadProjectConfig(ROOT);
+      const opts = resolveOptions({ detail: "full", emitHtml: false }, projectConfig);
       const stat = fs.statSync(abs);
 
       const filesToCheck: string[] = stat.isDirectory()
         ? collectSourceFiles(abs, opts)
         : [abs];
+
+      // Merge thresholds: call param → config file → defaults
+      const thresholds: GeneralRuleThresholds = {
+        largeFileLines:  maxLines   ?? projectConfig.rules?.["large-file"]?.maxLines    ?? GENERAL_RULE_DEFAULTS.largeFileLines,
+        tooManyImports:  maxImports ?? projectConfig.rules?.["too-many-imports"]?.maxImports ?? GENERAL_RULE_DEFAULTS.tooManyImports,
+        godExportCount:  maxExports ?? projectConfig.rules?.["god-export"]?.maxExports   ?? GENERAL_RULE_DEFAULTS.godExportCount,
+      };
 
       interface Violation {
         file: string;
@@ -324,37 +341,40 @@ server.registerTool(
           continue;
         }
 
-        // Rule 1: "use client" files must not import server-only modules
+        // Next.js Rule 1: "use client" boundary
         if (hasDirective(source, "use client")) {
           for (const imp of findServerImports(source)) {
             violations.push({
-              file: fileRel,
-              rule: "client-server-boundary",
-              severity: "error",
+              file: fileRel, rule: "client-server-boundary", severity: "error",
               message: `"use client" file imports server-only module "${imp.label}" (${imp.module})`,
               line: imp.line,
             });
           }
         }
 
-        // Rule 2: API route handlers should have try/catch
+        // Next.js Rule 2: API route try/catch
         if (isApiRoute(fileRel)) {
           try {
             const skel = await buildSkeleton(file, fileRel, opts);
             const sourceLines = source.split("\n");
             for (const sym of findMissingTryCatch(skel.symbols, sourceLines)) {
               violations.push({
-                file: fileRel,
-                rule: "api-missing-try-catch",
-                severity: "warning",
-                message: `API handler "${sym.name}" has no try/catch — unhandled errors produce unstructured 500 responses`,
+                file: fileRel, rule: "api-missing-try-catch", severity: "warning",
+                message: `API handler "${sym.name}" has no try/catch`,
                 line: sym.range.startLine,
               });
             }
-          } catch {
-            // skip parse errors silently
-          }
+          } catch { /* skip */ }
         }
+
+        // General rules (Rules 3–5)
+        try {
+          const skel = await buildSkeleton(file, fileRel, opts);
+          const importCount = skel.imports?.length ?? 0;
+          for (const v of checkGeneralRules(fileRel, source, skel.symbols, importCount, thresholds)) {
+            violations.push(v);
+          }
+        } catch { /* skip */ }
       }
 
       const errors = violations.filter((v) => v.severity === "error").length;
@@ -365,10 +385,10 @@ server.registerTool(
         violations: violations.length,
         errors,
         warnings,
-        summary:
-          violations.length === 0
-            ? "✓ No architecture violations found."
-            : `Found ${errors} error(s) and ${warnings} warning(s).`,
+        thresholds,
+        summary: violations.length === 0
+          ? "✓ No architecture violations found."
+          : `Found ${errors} error(s) and ${warnings} warning(s).`,
         results: violations,
       });
     } catch (err) {
