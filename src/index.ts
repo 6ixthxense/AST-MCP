@@ -24,6 +24,8 @@ import {
 } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
+import { findDeadExports, findCircularDeps, getChangeImpact } from "./graph-analysis.js";
+import { buildCallGraph } from "./callgraph.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -70,7 +72,7 @@ function errorText(message: string) {
 
 const server = new McpServer({
   name: "universal-ast-mapper",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 /* ----------------------- tool: list_supported_languages ----------------------- */
@@ -485,6 +487,237 @@ server.registerTool(
         ...(errors.length > 0 ? { errors } : {}),
         graph,
       });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: find_dead_code ──────────────────────────────── */
+server.registerTool(
+  "find_dead_code",
+  {
+    title: "Find dead (unreferenced) exports",
+    description:
+      "Scan a directory, build the import graph, and return exported symbols that are never " +
+      "imported by any other file in the scan root. These are candidates for removal.\n" +
+      "Note: entry-point symbols (e.g. Next.js page exports) are technically 'dead' within " +
+      "the codebase graph — use your judgement before deleting them.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("Directory to scan, relative to project root or absolute within it."),
+      detail: z
+        .enum(["outline", "full"])
+        .optional()
+        .describe('"outline" (default) is sufficient for dead-code detection.'),
+    },
+  },
+  async ({ path: input, detail }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. find_dead_code requires a directory.`);
+      }
+
+      const opts = resolveOptions({ detail, emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skeletons: SkeletonFile[] = [];
+      const errors: Array<{ file: string; error: string }> = [];
+
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try {
+          skeletons.push(await buildSkeleton(file, fileRel, opts));
+        } catch (err) {
+          errors.push({ file: fileRel, error: describeError(err) });
+        }
+      }
+
+      const graph = buildSymbolGraph(skeletons, ROOT);
+      const dead = findDeadExports(graph);
+
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        deadExportCount: dead.length,
+        ...(errors.length > 0 ? { errors } : {}),
+        deadExports: dead,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: find_circular_deps ──────────────────────────── */
+server.registerTool(
+  "find_circular_deps",
+  {
+    title: "Find circular import dependencies",
+    description:
+      "Scan a directory and detect circular import chains (A → B → C → A). " +
+      "Each result includes the full cycle path with repeated start node at the end for clarity.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("Directory to scan, relative to project root or absolute within it."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. find_circular_deps requires a directory.`);
+      }
+
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skeletons: SkeletonFile[] = [];
+      const errors: Array<{ file: string; error: string }> = [];
+
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try {
+          skeletons.push(await buildSkeleton(file, fileRel, opts));
+        } catch (err) {
+          errors.push({ file: fileRel, error: describeError(err) });
+        }
+      }
+
+      const cycles = findCircularDeps(skeletons, ROOT);
+
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        cycleCount: cycles.length,
+        ...(errors.length > 0 ? { errors } : {}),
+        cycles,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_change_impact ───────────────────────────── */
+server.registerTool(
+  "get_change_impact",
+  {
+    title: "Get change impact (blast radius)",
+    description:
+      "Given a file and a symbol name, find every file/symbol in the project that directly or " +
+      "transitively depends on it via imports. Use this before refactoring to understand blast radius.\n" +
+      "Returns: { direct, transitive, totalFiles } where direct = files that import the symbol " +
+      "directly, transitive = further dependents up the chain.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("File containing the symbol, relative to project root or absolute within it."),
+      symbol: z.string().describe("Name of the exported symbol to analyse."),
+      scanDir: z
+        .string()
+        .optional()
+        .describe(
+          "Directory to build the dependency graph from. Defaults to the directory of the given file.",
+        ),
+    },
+  },
+  async ({ path: input, symbol, scanDir }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is a directory. Provide a single file path.`);
+      }
+
+      const scanRoot = scanDir ? resolveInRoot(scanDir).abs : path.dirname(abs);
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(scanRoot, opts);
+      const skeletons: SkeletonFile[] = [];
+
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try {
+          skeletons.push(await buildSkeleton(file, fileRel, opts));
+        } catch {
+          // skip parse errors
+        }
+      }
+
+      const graph = buildSymbolGraph(skeletons, ROOT);
+      const targetNodeId = `${rel.split(path.sep).join("/")}::${symbol}`;
+      const impact = getChangeImpact(graph, targetNodeId);
+
+      if (!impact) {
+        return errorText(
+          `Symbol "${symbol}" not found in graph for "${rel}". ` +
+            `Check the symbol name and ensure the file is inside the scan directory.`,
+        );
+      }
+
+      return jsonText(impact);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_call_graph ──────────────────────────────── */
+server.registerTool(
+  "get_call_graph",
+  {
+    title: "Get function-level call graph",
+    description:
+      "For a named function in a file, return:\n" +
+      "  - calls: every function/method this function calls, with line number and resolved file\n" +
+      "  - calledBy: files that import (and thus likely call) this function\n" +
+      "Supports TypeScript, JavaScript, Python, and Go. " +
+      "Cross-file calls are resolved via the import graph; local calls are flagged isLocal=true.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("File path, relative to project root or absolute within it."),
+      function: z.string().describe("Name of the function or method to analyse."),
+      scanDir: z
+        .string()
+        .optional()
+        .describe(
+          "Directory to scan for reverse import lookup (calledBy). " +
+            "Defaults to the directory of the given file.",
+        ),
+    },
+  },
+  async ({ path: input, function: funcName, scanDir }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is a directory. Provide a single file path.`);
+      }
+
+      // Collect skeletons for the scan directory (for calledBy lookup)
+      const scanRoot = scanDir ? resolveInRoot(scanDir).abs : path.dirname(abs);
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(scanRoot, opts);
+      const skeletons: SkeletonFile[] = [];
+
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try {
+          skeletons.push(await buildSkeleton(file, fileRel, opts));
+        } catch {
+          // skip
+        }
+      }
+
+      const result = await buildCallGraph(abs, funcName, ROOT, skeletons);
+
+      if (!result) {
+        return errorText(
+          `Function "${funcName}" not found in "${rel}", or the file language is unsupported.`,
+        );
+      }
+
+      return jsonText(result);
     } catch (err) {
       return errorText(describeError(err));
     }
