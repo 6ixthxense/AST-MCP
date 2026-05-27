@@ -3,7 +3,7 @@ import path from "node:path";
 import { parseSource } from "./parser.js";
 import type { TSNode } from "./parser.js";
 import { buildSkeleton } from "./skeleton.js";
-import { resolveOptions } from "./config.js";
+import { resolveOptions, loadProjectConfig } from "./config.js";
 import { detectLanguage } from "./registry.js";
 import { resolveImportPath } from "./resolver.js";
 import type { SkeletonFile } from "./types.js";
@@ -218,7 +218,7 @@ export async function buildCallGraph(
   collectCalls(body, rawCalls);
 
   // Parse the file's imports to resolve callee origins
-  const opts = resolveOptions({ detail: "outline", emitHtml: false });
+  const opts = resolveOptions({ detail: "outline", emitHtml: false }, loadProjectConfig(root));
   const skel = await buildSkeleton(filePath, relPath, opts);
 
   // localName → module specifier

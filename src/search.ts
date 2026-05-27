@@ -1,6 +1,6 @@
 import path from "node:path";
 import { buildSkeleton, collectSourceFiles } from "./skeleton.js";
-import { resolveOptions } from "./config.js";
+import { resolveOptions, loadProjectConfig } from "./config.js";
 import type { SymbolNode } from "./types.js";
 
 // ─── Public types ──────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ export async function searchSymbols(
 ): Promise<SymbolMatch[]> {
   const { matchType = "contains", kind, exportedOnly = false, detail = "outline" } = options;
   const test = makeMatcher(pattern, matchType);
-  const opts = resolveOptions({ detail, emitHtml: false });
+  const opts = resolveOptions({ detail, emitHtml: false }, loadProjectConfig(root));
   const files = collectSourceFiles(dirAbs, opts);
   const results: SymbolMatch[] = [];
 

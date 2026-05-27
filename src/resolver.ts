@@ -24,6 +24,21 @@ export interface ResolvedImport extends ImportRef {
 
 const SRC_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
 
+/** Extract the outermost balanced parenthesised group from a signature string. */
+function extractParams(sig: string): string | null {
+  const start = sig.indexOf("(");
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < sig.length; i++) {
+    if (sig[i] === "(") depth++;
+    else if (sig[i] === ")") {
+      depth--;
+      if (depth === 0) return sig.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 // TypeScript ESM: `import from "./foo.js"` actually means `./foo.ts` on disk.
 // Map each JS-family extension to the TS-family equivalents we should try first.
 const JS_TO_TS: Record<string, string[]> = {
@@ -112,8 +127,7 @@ export async function resolveFileImports(
           kind = targetSym.kind;
           signature = targetSym.signature ?? null;
           if (signature) {
-            const m = signature.match(/\([^)]*\)/);
-            params = m ? m[0] : null;
+            params = extractParams(signature);
           }
         }
       } catch {

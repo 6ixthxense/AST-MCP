@@ -414,7 +414,8 @@ program
     if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
 
     const skeletons = await gatherSkeletons(abs);
-    const cycles = findCircularDeps(skeletons, ROOT);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const cycles = findCircularDeps(graph);
 
     if (opts.json) return jsonOut({ directory: rel, scanned: skeletons.length, cycleCount: cycles.length, cycles });
 

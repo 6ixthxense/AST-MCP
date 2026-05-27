@@ -606,7 +606,8 @@ server.registerTool(
         }
       }
 
-      const cycles = findCircularDeps(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, ROOT);
+      const cycles = findCircularDeps(graph);
 
       return jsonText({
         directory: rel.split(path.sep).join("/"),

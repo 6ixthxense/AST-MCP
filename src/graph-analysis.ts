@@ -1,7 +1,4 @@
-import path from "node:path";
-import type { SkeletonFile } from "./types.js";
 import type { SymbolGraph, GraphSymbolNode } from "./graph.js";
-import { resolveImportPath } from "./resolver.js";
 
 // ─── Dead Code Detection ──────────────────────────────────────────────────────
 
@@ -64,24 +61,26 @@ type DfsColor = "white" | "gray" | "black";
  * Detect circular import dependencies among the scanned files using DFS.
  * Each reported cycle is canonicalised (rotated to start at the
  * lexicographically smallest node) to avoid duplicates.
+ *
+ * Re-uses the graph's already-resolved import edges — no path re-resolution needed.
  */
-export function findCircularDeps(skeletons: SkeletonFile[], root: string): CircularDep[] {
-  // Build file-level adjacency list
-  const adj = new Map<string, string[]>();
-  for (const skel of skeletons) {
-    const deps: string[] = [];
-    adj.set(skel.file, deps);
-    if (!skel.imports) continue;
-    const fromAbs = path.resolve(root, skel.file);
-    for (const imp of skel.imports) {
-      if (!imp.from.startsWith(".") || imp.isSideEffect) continue;
-      const resolvedAbs = resolveImportPath(imp.from, fromAbs);
-      if (!resolvedAbs) continue;
-      const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
-      // Only include files that are part of the scanned set
-      if (adj.has(resolvedRel)) deps.push(resolvedRel);
-    }
+export function findCircularDeps(graph: SymbolGraph): CircularDep[] {
+  const nodeMap = new Map(graph.nodes.map(n => [n.id, n]));
+
+  // Build deduplicated file-level adjacency from the graph's "imports" edges
+  const adjSets = new Map<string, Set<string>>();
+  for (const node of graph.nodes) {
+    if (node.nodeType === "file") adjSets.set(node.id, new Set());
   }
+  for (const edge of graph.edges) {
+    if (edge.edgeType !== "imports") continue;
+    const toNode = nodeMap.get(edge.to);
+    if (!toNode) continue;
+    const toFile = toNode.nodeType === "file" ? toNode.id : (toNode as GraphSymbolNode).file;
+    if (edge.from !== toFile) adjSets.get(edge.from)?.add(toFile);
+  }
+  const adj = new Map<string, string[]>();
+  for (const [k, v] of adjSets) adj.set(k, [...v]);
 
   const color = new Map<string, DfsColor>();
   for (const f of adj.keys()) color.set(f, "white");
