@@ -5,11 +5,22 @@ import { resolveImportPath } from "./resolver.js";
 
 // ─── Dead Code Detection ──────────────────────────────────────────────────────
 
+/**
+ * "High" confidence = functions / classes / consts that are unlikely to be
+ * used purely as type annotations.
+ * "Low" confidence = interfaces / types / enums — these are often imported
+ * implicitly through the TypeScript type system without an explicit import
+ * statement, so they may appear "dead" even when they're actively used.
+ */
+const HIGH_CONFIDENCE_KINDS = new Set(["function", "class", "const", "var", "method"]);
+
 export interface DeadExport {
   file: string;
   symbol: string;
   kind: string;
   nodeId: string;
+  /** high → very likely unused.  low → may be used as a type annotation only. */
+  confidence: "high" | "low";
 }
 
 /**
@@ -27,7 +38,13 @@ export function findDeadExports(graph: SymbolGraph): DeadExport[] {
     if (node.nodeType !== "symbol") continue;
     const sym = node as GraphSymbolNode;
     if (sym.exported && !importedIds.has(sym.id)) {
-      dead.push({ file: sym.file, symbol: sym.symbol, kind: sym.kind, nodeId: sym.id });
+      dead.push({
+        file: sym.file,
+        symbol: sym.symbol,
+        kind: sym.kind,
+        nodeId: sym.id,
+        confidence: HIGH_CONFIDENCE_KINDS.has(sym.kind) ? "high" : "low",
+      });
     }
   }
   return dead;
@@ -78,7 +95,6 @@ export function findCircularDeps(skeletons: SkeletonFile[], root: string): Circu
 
     for (const neighbor of adj.get(node) ?? []) {
       if (color.get(neighbor) === "gray") {
-        // Back edge — extract cycle from stack
         const start = stack.indexOf(neighbor);
         const raw = stack.slice(start);
         const canonical = rotateCycle(raw);
@@ -177,4 +193,113 @@ export function getChangeImpact(graph: SymbolGraph, targetNodeId: string): Chang
   const allFiles = new Set([...direct.map((e) => e.file), ...transitive.map((e) => e.file)]);
 
   return { targetNodeId, direct, transitive, totalFiles: allFiles.size };
+}
+
+// ─── File Dependencies ────────────────────────────────────────────────────────
+
+export interface FileDep {
+  file: string;
+  /** Specific symbols imported from / by this file. */
+  symbols: string[];
+}
+
+export interface FileDepResult {
+  file: string;
+  /** Files this file imports from (outgoing). */
+  imports: FileDep[];
+  /** Files that import from this file (incoming). */
+  importedBy: FileDep[];
+}
+
+/**
+ * Show the import relationships for a single file:
+ *   - `imports`    — what this file pulls in (outgoing edges)
+ *   - `importedBy` — who depends on this file (incoming edges)
+ *
+ * Returns null if the file node is not in the graph.
+ */
+export function getFileDeps(graph: SymbolGraph, fileId: string): FileDepResult | null {
+  if (!graph.nodes.some((n) => n.id === fileId && n.nodeType === "file")) return null;
+
+  const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
+
+  // fileId → set of imported symbol names
+  const outgoing = new Map<string, Set<string>>();
+  // fileId → set of symbols they import from us
+  const incoming = new Map<string, Set<string>>();
+
+  for (const edge of graph.edges) {
+    if (edge.edgeType !== "imports") continue;
+
+    const toNode = nodeMap.get(edge.to);
+    if (!toNode) continue;
+    const toFile = toNode.nodeType === "file"
+      ? toNode.id
+      : (toNode as GraphSymbolNode).file;
+    const symbolName = toNode.nodeType === "symbol"
+      ? (toNode as GraphSymbolNode).symbol
+      : null;
+
+    if (edge.from === fileId && toFile !== fileId) {
+      if (!outgoing.has(toFile)) outgoing.set(toFile, new Set());
+      if (symbolName) outgoing.get(toFile)!.add(symbolName);
+    }
+
+    if (toFile === fileId && edge.from !== fileId) {
+      if (!incoming.has(edge.from)) incoming.set(edge.from, new Set());
+      if (symbolName) incoming.get(edge.from)!.add(symbolName);
+    }
+  }
+
+  return {
+    file: fileId,
+    imports: [...outgoing.entries()].map(([file, syms]) => ({ file, symbols: [...syms].sort() })),
+    importedBy: [...incoming.entries()].map(([file, syms]) => ({ file, symbols: [...syms].sort() })),
+  };
+}
+
+// ─── Top Imported Symbols (God Node Detector) ────────────────────────────────
+
+export interface TopSymbol {
+  nodeId: string;
+  file: string;
+  symbol: string;
+  kind: string;
+  /** Number of distinct files that import this symbol. */
+  importCount: number;
+  importedByFiles: string[];
+}
+
+/**
+ * Return the most-imported symbols in the graph, sorted descending by
+ * the number of distinct files that depend on them. These are "God Nodes" —
+ * high-risk symbols where a breaking change has maximum blast radius.
+ */
+export function getTopSymbols(graph: SymbolGraph, limit = 10): TopSymbol[] {
+  // nodeId → set of importing file IDs
+  const importers = new Map<string, Set<string>>();
+
+  for (const edge of graph.edges) {
+    if (edge.edgeType !== "imports") continue;
+    if (!importers.has(edge.to)) importers.set(edge.to, new Set());
+    importers.get(edge.to)!.add(edge.from);
+  }
+
+  const results: TopSymbol[] = [];
+  for (const node of graph.nodes) {
+    if (node.nodeType !== "symbol") continue;
+    const sym = node as GraphSymbolNode;
+    const fileImporters = importers.get(sym.id);
+    if (!fileImporters || fileImporters.size === 0) continue;
+    results.push({
+      nodeId: sym.id,
+      file: sym.file,
+      symbol: sym.symbol,
+      kind: sym.kind,
+      importCount: fileImporters.size,
+      importedByFiles: [...fileImporters].sort(),
+    });
+  }
+
+  return results.sort((a, b) => b.importCount - a.importCount).slice(0, limit);
 }

@@ -24,8 +24,9 @@ import {
 } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
-import { findDeadExports, findCircularDeps, getChangeImpact } from "./graph-analysis.js";
+import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
+import { searchSymbols } from "./search.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -72,7 +73,7 @@ function errorText(message: string) {
 
 const server = new McpServer({
   name: "universal-ast-mapper",
-  version: "0.3.0",
+  version: "0.4.0",
 });
 
 /* ----------------------- tool: list_supported_languages ----------------------- */
@@ -718,6 +719,147 @@ server.registerTool(
       }
 
       return jsonText(result);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: search_symbol ───────────────────────────────── */
+server.registerTool(
+  "search_symbol",
+  {
+    title: "Search symbols by name",
+    description:
+      "Find symbols (functions, classes, types, methods, …) by name across all source files " +
+      "in a directory. Supports exact match, contains (default), or regex.\n" +
+      "Useful when you know a symbol name but not which file it lives in.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("Directory to search in, relative to project root or absolute within it."),
+      name: z.string().describe("Symbol name to search for."),
+      matchType: z
+        .enum(["contains", "exact", "regex"])
+        .optional()
+        .describe('"contains" (default) — case-insensitive substring. "exact" — full name. "regex" — JS regex.'),
+      kind: z
+        .enum(["function", "class", "interface", "type", "method", "const", "var", "enum", "struct", "field"])
+        .optional()
+        .describe("Filter by symbol kind."),
+      exportedOnly: z
+        .boolean()
+        .optional()
+        .describe("Only return exported symbols. Default false."),
+    },
+  },
+  async ({ path: input, name, matchType, kind, exportedOnly }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. search_symbol requires a directory.`);
+      }
+      const matches = await searchSymbols(abs, name, ROOT, { matchType, kind, exportedOnly });
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        pattern: name,
+        matchCount: matches.length,
+        matches,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_file_deps ───────────────────────────────── */
+server.registerTool(
+  "get_file_deps",
+  {
+    title: "Get file-level import dependencies",
+    description:
+      "For a single file, show:\n" +
+      "  - imports: what this file imports from other files (with symbol names)\n" +
+      "  - importedBy: which files import from this file (with symbol names)\n" +
+      "More focused than build_symbol_graph — use this for quick dependency lookup without needing the full graph.",
+    inputSchema: {
+      path: z.string().describe("File to inspect, relative to project root or absolute within it."),
+      scanDir: z
+        .string()
+        .optional()
+        .describe("Directory to build the graph from. Defaults to the directory of the given file."),
+    },
+  },
+  async ({ path: input, scanDir }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is a directory. Provide a single file path.`);
+      }
+      const scanRoot = scanDir ? resolveInRoot(scanDir).abs : path.dirname(abs);
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(scanRoot, opts);
+      const skeletons: SkeletonFile[] = [];
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
+      }
+      const graph = buildSymbolGraph(skeletons, ROOT);
+      const fileId = rel.split(path.sep).join("/");
+      const result = getFileDeps(graph, fileId);
+      if (!result) {
+        return errorText(`"${rel}" was not found in the graph. Ensure it is inside the scan directory and is a supported source file.`);
+      }
+      return jsonText(result);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_top_symbols ─────────────────────────────── */
+server.registerTool(
+  "get_top_symbols",
+  {
+    title: "Get most-imported symbols (God Node detector)",
+    description:
+      "Scan a directory and return the N symbols that are imported by the most files. " +
+      "These are your codebase's 'God Nodes' — high-coupling, high-risk symbols where a " +
+      "breaking change would have maximum blast radius. Use before a major refactor to " +
+      "identify which symbols need the most care.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("Directory to scan, relative to project root or absolute within it."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Number of top symbols to return. Default 10."),
+    },
+  },
+  async ({ path: input, limit }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. get_top_symbols requires a directory.`);
+      }
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skeletons: SkeletonFile[] = [];
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
+      }
+      const graph = buildSymbolGraph(skeletons, ROOT);
+      const top = getTopSymbols(graph, limit ?? 10);
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        topSymbols: top,
+      });
     } catch (err) {
       return errorText(describeError(err));
     }

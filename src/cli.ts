@@ -10,8 +10,9 @@ import { supportedLanguages } from "./registry.js";
 import { findSymbol, findRelatedSymbols, hasDirective, findServerImports, isApiRoute, findMissingTryCatch } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
-import { findDeadExports, findCircularDeps, getChangeImpact } from "./graph-analysis.js";
+import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
+import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
 
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -355,15 +356,28 @@ program
 
     if (opts.json) return jsonOut({ directory: rel, scanned: skeletons.length, deadExportCount: dead.length, deadExports: dead });
 
+    const highConf = dead.filter(d => d.confidence === "high");
+    const lowConf  = dead.filter(d => d.confidence === "low");
+
     header(`Dead Code — ${rel}/  ${dim(`(${skeletons.length} files scanned)`)}`);
     if (dead.length === 0) {
       console.log(indent(green("✓ No dead exports found.")));
     } else {
-      table(
-        dead.map(d => [d.file, d.symbol, d.kind]),
-        [["File", 44], ["Symbol", 28], ["Kind", 10]],
-      );
-      console.log(`\n  ${yellow(`${dead.length} dead export(s) found`)}`);
+      if (highConf.length > 0) {
+        console.log(indent(`${bold("High confidence")} ${dim("— functions / classes / consts")}`));
+        table(
+          highConf.map(d => [d.file, d.symbol, d.kind]),
+          [["File", 44], ["Symbol", 28], ["Kind", 10]],
+        );
+      }
+      if (lowConf.length > 0) {
+        console.log(`\n${indent(`${bold("Low confidence")} ${dim("— types / interfaces / enums (may be used as type annotations)")}`)}` );
+        table(
+          lowConf.map(d => [d.file, d.symbol, d.kind]),
+          [["File", 44], ["Symbol", 28], ["Kind", 10]],
+        );
+      }
+      console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
     }
     console.log();
   });
@@ -486,12 +500,128 @@ program
     console.log();
   });
 
+// ─── Command: search ─────────────────────────────────────────────────────────
+
+program
+  .command("search <pattern> [dir]")
+  .description("Find symbols by name across all files in a directory")
+  .option("-m, --match <type>", "contains (default) | exact | regex", "contains")
+  .option("-k, --kind <kind>", "Filter by kind: function, class, interface, type, method, const…")
+  .option("-e, --exported", "Only show exported symbols")
+  .option("--json", "Output as JSON")
+  .action(async (pattern: string, dir: string | undefined, opts: { match?: string; kind?: string; exported?: boolean; json?: boolean }) => {
+    const searchDir = dir ?? ".";
+    const { abs, rel } = resolveArg(searchDir);
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const matchType = (opts.match ?? "contains") as "contains" | "exact" | "regex";
+    const matches = await searchSymbols(abs, pattern, ROOT, {
+      matchType,
+      kind: opts.kind,
+      exportedOnly: opts.exported,
+    });
+
+    if (opts.json) return jsonOut({ directory: rel, pattern, matchCount: matches.length, matches });
+
+    header(`Symbol Search — ${bold(`"${pattern}"`)} in ${rel}/`);
+    if (matches.length === 0) {
+      console.log(indent(dim("No matches found.")));
+    } else {
+      table(
+        matches.map(m => [m.file, m.symbol, m.kind, m.exported ? green("✓") : dim("–")]),
+        [["File", 40], ["Symbol", 30], ["Kind", 12], ["Exported", 8]],
+      );
+      console.log(`\n  ${matches.length} match(es)`);
+    }
+    console.log();
+  });
+
+// ─── Command: deps ────────────────────────────────────────────────────────────
+
+program
+  .command("deps <file>")
+  .description("Show what a file imports and what imports it")
+  .option("--scan <dir>", "Directory to build the graph from (default: file's directory)")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string, opts: { scan?: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    if (fs.statSync(abs).isDirectory()) die(`Provide a single file path, not a directory`);
+
+    const scanRoot = opts.scan ? resolveArg(opts.scan).abs : path.dirname(abs);
+    const skeletons = await gatherSkeletons(scanRoot);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const fileId = rel;
+    const result = getFileDeps(graph, fileId);
+
+    if (!result) die(`"${rel}" not found in graph — check it's inside the scan directory and is a supported source file`);
+    if (opts.json) return jsonOut(result);
+
+    header(`File Dependencies — ${bold(rel)}`);
+
+    console.log(`\n${indent(`${bold("Imports from")} ${dim(`(${result.imports.length} files)`)}`)}`);
+    if (result.imports.length === 0) {
+      console.log(indent(dim("  (no local imports)"), 2));
+    } else {
+      for (const dep of result.imports) {
+        const syms = dep.symbols.length > 0 ? dim(`  [${dep.symbols.slice(0, 5).join(", ")}${dep.symbols.length > 5 ? ` +${dep.symbols.length - 5}` : ""}]`) : "";
+        console.log(indent(`${green("→")}  ${dep.file}${syms}`, 4));
+      }
+    }
+
+    console.log(`\n${indent(`${bold("Imported by")} ${dim(`(${result.importedBy.length} files)`)}`)}`);
+    if (result.importedBy.length === 0) {
+      console.log(indent(dim("  (no files import this)"), 2));
+    } else {
+      for (const dep of result.importedBy) {
+        const syms = dep.symbols.length > 0 ? dim(`  [${dep.symbols.slice(0, 5).join(", ")}${dep.symbols.length > 5 ? ` +${dep.symbols.length - 5}` : ""}]`) : "";
+        console.log(indent(`${gray("←")}  ${dep.file}${syms}`, 4));
+      }
+    }
+    console.log();
+  });
+
+// ─── Command: top ─────────────────────────────────────────────────────────────
+
+program
+  .command("top <dir>")
+  .description("Show the most-imported symbols — find God Nodes before they hurt you")
+  .option("-n, --limit <n>", "Number of results to show", "10")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string, opts: { limit?: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const limit = Math.max(1, parseInt(opts.limit ?? "10", 10) || 10);
+    const top = getTopSymbols(graph, limit);
+
+    if (opts.json) return jsonOut({ directory: rel, scanned: skeletons.length, topSymbols: top });
+
+    header(`Top Imported Symbols — ${rel}/  ${dim(`(${skeletons.length} files)`)}`);
+    if (top.length === 0) {
+      console.log(indent(dim("No import edges found.")));
+    } else {
+      table(
+        top.map((s, i) => [
+          String(i + 1).padStart(2),
+          s.symbol,
+          s.file,
+          s.kind,
+          yellow(String(s.importCount)),
+        ]),
+        [["#", 3], ["Symbol", 28], ["File", 38], ["Kind", 10], ["Used by", 7]],
+      );
+    }
+    console.log();
+  });
+
 // ─── Root metadata ────────────────────────────────────────────────────────────
 
 program
   .name("ast-map")
   .description("CLI for universal-ast-mapper — structural code analysis tools")
-  .version("0.3.0")
+  .version("0.4.0")
   .addHelpText("after", `
 ${bold("Examples:")}
   ast-map langs
@@ -502,6 +632,9 @@ ${bold("Examples:")}
   ast-map validate src/
   ast-map dead src/
   ast-map cycles src/
+  ast-map search validateSession src/ --exported
+  ast-map deps src/lib/auth.ts --scan src/
+  ast-map top src/ -n 15
   ast-map impact src/utils.ts sanitize --scan src/
   ast-map calls src/utils.ts buildCallGraph --scan src/
 
