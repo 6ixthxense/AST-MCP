@@ -1,0 +1,90 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { SkeletonFile } from "./types.js";
+import type { SkeletonOptions } from "./config.js";
+import { detectLanguage, supportedExtensions } from "./registry.js";
+import { parseSource } from "./parser.js";
+import { countSymbols, toOutline } from "./extractors/common.js";
+
+export const SCHEMA_VERSION = "1.1";
+export const GRAMMAR_SOURCE = "tree-sitter-wasms@0.1.13";
+
+export class UnsupportedLanguageError extends Error {
+  constructor(public readonly ext: string) {
+    super(`Unsupported file type "${ext}". Supported: ${supportedExtensions().join(", ")}`);
+    this.name = "UnsupportedLanguageError";
+  }
+}
+
+/**
+ * Build a skeleton for a single file.
+ * @param absPath absolute path on disk (already validated to be within root)
+ * @param relPath path relative to root, used as the displayed `file`
+ */
+export async function buildSkeleton(
+  absPath: string,
+  relPath: string,
+  opts: SkeletonOptions,
+): Promise<SkeletonFile> {
+  const ext = path.extname(absPath).toLowerCase();
+  const entry = detectLanguage(absPath);
+  if (!entry) throw new UnsupportedLanguageError(ext);
+
+  const stat = fs.statSync(absPath);
+  if (stat.size > opts.maxFileBytes) {
+    throw new Error(
+      `File is ${stat.size} bytes, exceeds maxFileBytes (${opts.maxFileBytes}). Increase the limit to parse it.`,
+    );
+  }
+
+  const source = fs.readFileSync(absPath, "utf8");
+  const root = await parseSource(entry.grammar, source);
+  let symbols = entry.extract(root, source);
+  if (opts.detail === "outline") symbols = toOutline(symbols);
+
+  const directives = entry.extractDirectives ? entry.extractDirectives(root, source) : [];
+  const imports = entry.extractImports ? entry.extractImports(root, source) : [];
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    file: relPath.split(path.sep).join("/"),
+    language: entry.language,
+    generatedAt: new Date().toISOString(),
+    parser: { engine: "tree-sitter", grammar: `${entry.grammar} (${GRAMMAR_SOURCE})` },
+    symbolCount: countSymbols(symbols),
+    ...(directives.length > 0 ? { directives } : {}),
+    ...(imports.length > 0 ? { imports } : {}),
+    symbols,
+  };
+}
+
+/** Recursively collect supported source files under a directory. */
+export function collectSourceFiles(absDir: string, opts: SkeletonOptions): string[] {
+  const supported = new Set(supportedExtensions());
+  const ignore = new Set(opts.ignore);
+  const results: string[] = [];
+
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith(".") && e.name !== "." ) {
+        // skip dotfiles/dotdirs unless explicitly a source file
+        if (e.isDirectory()) continue;
+      }
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!ignore.has(e.name)) walk(full);
+      } else if (e.isFile() && supported.has(path.extname(e.name).toLowerCase())) {
+        results.push(full);
+      }
+    }
+  };
+
+  walk(absDir);
+  return results.sort();
+}
