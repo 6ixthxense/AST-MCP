@@ -1,21 +1,26 @@
 import path from "node:path";
-import type { SkeletonFile, SymbolNode } from "./types.js";
+import type { SkeletonFile, SymbolNode, ImportRef } from "./types.js";
 import { resolveImportPath } from "./resolver.js";
+import {
+  buildCrossLangIndex,
+  resolveCrossLangTarget,
+  type CrossLangIndex,
+} from "./crosslang.js";
 
 // ─── Node types ───────────────────────────────────────────────────────────────
 
 export interface GraphFileNode {
-  id: string;          // e.g. "src/foo.ts"
+  id: string;
   nodeType: "file";
   language: string;
   symbolCount: number;
 }
 
 export interface GraphSymbolNode {
-  id: string;          // e.g. "src/foo.ts::MyClass" or "src/foo.ts::MyClass.method"
+  id: string;
   nodeType: "symbol";
-  file: string;        // owning file rel path
-  symbol: string;      // short name of this symbol
+  file: string;
+  symbol: string;
   kind: string;
   exported: boolean;
   range: { startLine: number; endLine: number };
@@ -24,16 +29,11 @@ export interface GraphSymbolNode {
 
 export type GraphNode = GraphFileNode | GraphSymbolNode;
 
-// ─── Edge type ────────────────────────────────────────────────────────────────
-
 export interface GraphEdge {
-  from: string;        // node id
-  to: string;          // node id
-  /** "contains" = structural parent→child; "imports" = cross-file dependency. */
+  from: string;
+  to: string;
   edgeType: "contains" | "imports";
 }
-
-// ─── Graph ───────────────────────────────────────────────────────────────────
 
 export interface SymbolGraph {
   nodes: GraphNode[];
@@ -55,7 +55,6 @@ function collectSymbolNodes(
   edges: GraphEdge[],
 ): void {
   for (const sym of symbols) {
-    // Nested symbols use dot-notation: "src/foo.ts::MyClass.methodName"
     const nodeId = `${parentId}.${sym.name}`;
     nodes.push({
       id: nodeId,
@@ -68,38 +67,94 @@ function collectSymbolNodes(
       ...(sym.signature ? { signature: sym.signature } : {}),
     });
     edges.push({ from: parentId, to: nodeId, edgeType: "contains" });
-
     if (sym.children.length > 0) {
       collectSymbolNodes(sym.children, nodeId, file, nodes, edges);
     }
   }
 }
 
+// Returns true for path-based import languages (TS/JS/Python/Go).
+function isPathBasedLanguage(language: string): boolean {
+  return (
+    language === "typescript" ||
+    language === "tsx" ||
+    language === "javascript" ||
+    language === "python"
+  );
+}
+
+// Wire one TS/JS/Python-style relative import.
+function wirePathImport(
+  skel: SkeletonFile,
+  imp: ImportRef,
+  fromFileAbs: string,
+  root: string,
+  exportedSymbolMap: Map<string, Map<string, string>>,
+  edges: GraphEdge[],
+): void {
+  if (!imp.from.startsWith(".")) return;
+  if (imp.isSideEffect) return;
+  const resolvedAbs = resolveImportPath(imp.from, fromFileAbs);
+  if (!resolvedAbs) return;
+  const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
+
+  if (imp.isNamespaceImport || imp.symbol === "*") {
+    if (exportedSymbolMap.has(resolvedRel)) {
+      edges.push({ from: skel.file, to: resolvedRel, edgeType: "imports" });
+    }
+  } else {
+    const fileExports = exportedSymbolMap.get(resolvedRel);
+    const targetNodeId = fileExports?.get(imp.symbol);
+    if (targetNodeId) {
+      edges.push({ from: skel.file, to: targetNodeId, edgeType: "imports" });
+    }
+  }
+}
+
+// Wire one cross-language import (Java/C#/Rust) using the project-wide index.
+function wireCrossLangImport(
+  skel: SkeletonFile,
+  imp: ImportRef,
+  fromFileAbs: string,
+  root: string,
+  index: CrossLangIndex,
+  exportedSymbolMap: Map<string, Map<string, string>>,
+  edges: GraphEdge[],
+): void {
+  if (imp.isSideEffect) return;
+  const target = resolveCrossLangTarget(imp, skel, fromFileAbs, root, index);
+  if (!target) return;
+
+  if (target.kind === "file") {
+    for (const f of target.files) {
+      if (exportedSymbolMap.has(f) && f !== skel.file) {
+        edges.push({ from: skel.file, to: f, edgeType: "imports" });
+      }
+    }
+    return;
+  }
+
+  // target.kind === "symbol"
+  const fileExports = exportedSymbolMap.get(target.file);
+  const targetNodeId = fileExports?.get(target.symbol);
+  if (targetNodeId) {
+    edges.push({ from: skel.file, to: targetNodeId, edgeType: "imports" });
+  } else if (exportedSymbolMap.has(target.file) && target.file !== skel.file) {
+    // Symbol not found in the resolved file — fall back to a file-level edge so
+    // the graph still reflects the cross-file dependency.
+    edges.push({ from: skel.file, to: target.file, edgeType: "imports" });
+  }
+}
+
 // ─── Public builder ──────────────────────────────────────────────────────────
 
-/**
- * Build a symbol-level dependency graph from an array of pre-parsed skeletons.
- *
- * Node IDs:
- *   - File node:   "<relPath>"                       e.g. "src/utils.ts"
- *   - Top symbol:  "<relPath>::<Name>"               e.g. "src/utils.ts::sanitize"
- *   - Nested:      "<relPath>::<Parent>.<Child>"     e.g. "src/utils.ts::MyClass.render"
- *
- * Edge types:
- *   - "contains"  file → symbol (and parent-symbol → child-symbol)
- *   - "imports"   importing-file → imported-symbol-node
- */
 export function buildSymbolGraph(skeletons: SkeletonFile[], root: string): SymbolGraph {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
-
-  // exportedSymbolMap: relFile → (symbolName → nodeId)
-  // Used in the second pass to resolve import targets.
   const exportedSymbolMap = new Map<string, Map<string, string>>();
 
-  // ── First pass: build all file + symbol nodes ────────────────────────────
+  // First pass: build file and symbol nodes.
   for (const skel of skeletons) {
-    // File node
     nodes.push({
       id: skel.file,
       nodeType: "file",
@@ -124,9 +179,15 @@ export function buildSymbolGraph(skeletons: SkeletonFile[], root: string): Symbo
       });
       edges.push({ from: skel.file, to: nodeId, edgeType: "contains" });
 
+      // Index exported (and visible-by-convention) top-level symbols so that
+      // imports can find them. Languages like Java/C# may have visible types
+      // without an explicit "exported" flag — fall back to indexing all
+      // top-level symbols for those languages.
       if (sym.exported) fileExports.set(sym.name, nodeId);
+      else if (skel.language === "java" || skel.language === "csharp") {
+        fileExports.set(sym.name, nodeId);
+      }
 
-      // Collect nested symbols
       if (sym.children.length > 0) {
         const childNodes: GraphSymbolNode[] = [];
         const childEdges: GraphEdge[] = [];
@@ -137,32 +198,25 @@ export function buildSymbolGraph(skeletons: SkeletonFile[], root: string): Symbo
     }
   }
 
-  // ── Second pass: wire import edges ───────────────────────────────────────
+  // Build cross-language indexes once (Java FQCN, C# namespaces).
+  const crossIndex = buildCrossLangIndex(skeletons);
+
+  // Second pass: wire import edges, dispatched by language.
   for (const skel of skeletons) {
     if (!skel.imports || skel.imports.length === 0) continue;
-
     const fromFileAbs = path.resolve(root, skel.file);
+    const pathBased = isPathBasedLanguage(skel.language);
 
     for (const imp of skel.imports) {
-      if (!imp.from.startsWith(".")) continue; // skip external packages
-      if (imp.isSideEffect) continue;
-
-      const resolvedAbs = resolveImportPath(imp.from, fromFileAbs);
-      if (!resolvedAbs) continue;
-
-      const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
-
-      if (imp.isNamespaceImport || imp.symbol === "*") {
-        // Namespace import — link to the file node itself
-        if (exportedSymbolMap.has(resolvedRel)) {
-          edges.push({ from: skel.file, to: resolvedRel, edgeType: "imports" });
-        }
-      } else {
-        const fileExports = exportedSymbolMap.get(resolvedRel);
-        const targetNodeId = fileExports?.get(imp.symbol);
-        if (targetNodeId) {
-          edges.push({ from: skel.file, to: targetNodeId, edgeType: "imports" });
-        }
+      if (pathBased) {
+        wirePathImport(skel, imp, fromFileAbs, root, exportedSymbolMap, edges);
+      } else if (
+        skel.language === "java" ||
+        skel.language === "csharp" ||
+        skel.language === "rust" ||
+        skel.language === "go"
+      ) {
+        wireCrossLangImport(skel, imp, fromFileAbs, root, crossIndex, exportedSymbolMap, edges);
       }
     }
   }

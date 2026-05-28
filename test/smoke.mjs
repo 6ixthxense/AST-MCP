@@ -103,5 +103,83 @@ check("ReserveStock is exported (public)", reserve?.exported === true && reserve
 const release = go.symbols.find((s) => s.name === "release");
 check("release is private", release?.visibility === "private");
 
+// ─── Rust ────────────────────────────────────────────────────────────────────
+const rust = await run("sample.rs", [
+  "struct:Inventory",
+  "field:db",
+  "field:count",
+  "interface:Reader",
+  "method:read",
+  "enum:Color",
+  "method:Inventory::reserve",
+  "method:Inventory::private_helper",
+  "function:top_level",
+  "const:MAX",
+  "type:Id",
+]);
+const rustInv = rust.symbols.find((s) => s.name === "Inventory");
+check("Rust: Inventory is pub (exported)", rustInv?.exported === true);
+const rustDb = rustInv?.children.find((c) => c.name === "db");
+check("Rust: db field is private (no pub)", rustDb?.visibility === "private");
+const rustCount = rustInv?.children.find((c) => c.name === "count");
+check("Rust: count field is pub", rustCount?.visibility === "public");
+const rustReserve = rust.symbols.find((s) => s.name === "Inventory::reserve");
+check("Rust: impl method Inventory::reserve is pub", rustReserve?.exported === true);
+const rustPriv = rust.symbols.find((s) => s.name === "Inventory::private_helper");
+check("Rust: private_helper is private", rustPriv?.visibility === "private");
+check("Rust: use imports captured", (rust.imports?.length ?? 0) >= 2);
+check("Rust: imports HashMap", rust.imports?.some((i) => i.symbol === "HashMap") ?? false);
+
+// ─── Java ────────────────────────────────────────────────────────────────────
+const java = await run("Sample.java", [
+  "class:InventoryService",
+  "field:db",
+  "const:MAX",
+  "method:reserve",
+  "method:helper",
+  "interface:Reader",
+  "method:read",
+  "method:close",
+  "enum:Color",
+]);
+const javaInv = java.symbols.find((s) => s.name === "InventoryService");
+check("Java: InventoryService is public (exported)", javaInv?.exported === true);
+const javaDb = javaInv?.children.find((c) => c.name === "db");
+check("Java: db field is private", javaDb?.visibility === "private");
+const javaMax = javaInv?.children.find((c) => c.name === "MAX");
+check("Java: MAX is const (static final)", javaMax?.kind === "const");
+const javaHelper = javaInv?.children.find((c) => c.name === "helper");
+check("Java: helper method is private", javaHelper?.visibility === "private");
+const javaReader = java.symbols.find((s) => s.name === "Reader");
+check("Java: package-private Reader is NOT exported", javaReader?.exported === false);
+check("Java: imports captured", (java.imports?.length ?? 0) >= 2);
+check("Java: imports java.util.List", java.imports?.some((i) => i.from === "java.util.List") ?? false);
+
+// ─── C# ──────────────────────────────────────────────────────────────────────
+const cs = await run("Sample.cs", [
+  "class:InventoryService",
+  "field:db",
+  "field:Count",
+  "method:Reserve",
+  "method:Helper",
+  "interface:IReader",
+  "method:Read",
+  "enum:Color",
+  "struct:Point",
+  "field:X",
+]);
+const csInv = cs.symbols.find((s) => s.name === "InventoryService");
+check("C#: InventoryService is public (exported)", csInv?.exported === true);
+const csDb = csInv?.children.find((c) => c.name === "db");
+check("C#: db field is private (no modifier)", csDb?.visibility === "private");
+const csCount = csInv?.children.find((c) => c.name === "Count");
+check("C#: Count property surfaced as public field", csCount?.visibility === "public" && csCount?.kind === "field");
+const csHelper = csInv?.children.find((c) => c.name === "Helper");
+check("C#: Helper method is private", csHelper?.visibility === "private");
+const csPoint = cs.symbols.find((s) => s.name === "Point");
+check("C#: namespace recursion surfaced struct Point", csPoint?.kind === "struct");
+check("C#: using directives captured", (cs.imports?.length ?? 0) >= 2);
+check("C#: imports System", cs.imports?.some((i) => i.from === "System") ?? false);
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

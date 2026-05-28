@@ -4,7 +4,25 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go
+**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C#
+
+| Capability               | TS/JS | Python | Go  | Rust | Java | C#  |
+|--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|
+| Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+| Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+
+Each language uses the resolution strategy that fits it:
+- **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting.
+- **Go** — `go.mod` ancestor lookup → module path prefix → package directory → all `.go` files (skips `_test.go`).
+- **Rust** — `Cargo.toml` ancestor → `crate::` / `self::` / `super::` walks; supports `mod.rs` + Rust-2018 sibling-dir style.
+- **Java** — project-wide FQCN index (`package + "." + className → file`) built lazily on first cross-lang call; supports wildcard imports.
+- **C#** — namespace-to-files index plus a `<ns>.<TypeName>` index so `using App.Models` + `new Inventory()` resolves to the right file.
+
+For C# and Go (where imports don't name the called symbol), reverse `calledBy` falls back to **call-site scanning** of candidate files.
 
 ---
 
@@ -269,8 +287,8 @@ Parse a function body → extract every call expression, resolve callees via the
 }
 ```
 
-Supports TypeScript, JavaScript, Python, Go.  
-Handles destructured aliases: `const { sign } = jwt` → `sign` correctly resolves to `jsonwebtoken`.
+Supports all 8 languages with per-language call extraction (TS/JS `member_expression`, Rust `field_expression`/`scoped_identifier`, Java `method_invocation`, C# `invocation_expression`, etc.) and constructor calls (`new Foo`).  
+Handles TS/JS destructured aliases (`const { sign } = jwt`), Java FQCN imports, C# `using` namespaces (via project-wide type index), Rust `use crate::path::Item`, Go `pkg.Func` (via go.mod module path). Reverse `calledBy` uses call-site scanning for C# and Go where import statements don't name the called symbol.
 
 **Params:** `path`, `function`, `scanDir`
 
@@ -435,8 +453,9 @@ src/
 ├── registry.ts         — language detection + extractor registry
 ├── parser.ts           — tree-sitter WASM loader + AST node helpers
 ├── skeleton.ts         — buildSkeleton(), collectSourceFiles() + parse cache
-├── resolver.ts         — resolveImportPath(), resolveFileImports()
-├── graph.ts            — buildSymbolGraph()
+├── resolver.ts         — resolveImportPath(), resolveFileImports() (TS/JS/Python relative)
+├── crosslang.ts        — Java FQCN / C# namespace / Rust crate / Go module resolvers + index cache
+├── graph.ts            — buildSymbolGraph() (language-aware second pass)
 ├── graph-analysis.ts   — findDeadExports(), findCircularDeps(), getChangeImpact(),
 │                         getFileDeps(), getTopSymbols()
 ├── callgraph.ts        — buildCallGraph() — AST-level call extraction
@@ -447,7 +466,10 @@ src/
     ├── common.ts       — makeSymbol(), toOutline()
     ├── typescript.ts   — TS/JS/TSX: symbols + imports + re-exports
     ├── python.ts       — Python: symbols + relative import resolution
-    └── go.ts           — Go: symbols + imports
+    ├── go.ts           — Go: symbols + imports
+    ├── rust.ts         — Rust: struct/trait/enum/impl + `use` imports
+    ├── java.ts         — Java: class/interface/enum/method/field + package + imports
+    └── csharp.ts       — C#: namespace recursion + class/struct/interface/property + `using`
 ```
 
 ---
@@ -456,6 +478,8 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.7.0** | Go full resolution (reads `go.mod`, resolves package-as-directory) · C# reverse `calledBy` via call-site scanning · `csharpTypes` index lets `using` directives resolve to specific types · 4-suite test harness (smoke + graph-smoke + resolver-smoke + callgraph-smoke) |
+| **0.6.0** | **3 new languages: Rust · Java · C#** (extractors + import parsing) · cross-language resolver in `crosslang.ts` (Java FQCN index, C# namespace index, Rust `crate::` module walk) · symbol-graph `imports` edges + `resolveFileImports` enrichment + `get_call_graph` callee resolution rewired through it · Java `package` and C# `namespace` captured as directives |
 | **0.5.3** | Auto-install `/ast-map` Claude Code skill on `npm install` · `postinstall` writes `~/.claude/skills/ast-map/SKILL.md` + registers trigger in `CLAUDE.md` (idempotent, CI-safe) |
 | **0.5.2** | Iterative DFS in `findCircularDeps` (eliminates stack overflow on large codebases) · `build_symbol_graph` inline size guard (>2000 nodes → stats + warning) · integration test suite (`test/analysis.mjs`) |
 | **0.5.1** | Re-export tracking (`export { X } from './foo'`, barrel files) · `export const` surfaced as symbols · `const X = class {}` support · Python relative import fix · parser instance cache |

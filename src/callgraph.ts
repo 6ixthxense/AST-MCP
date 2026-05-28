@@ -5,25 +5,21 @@ import type { TSNode } from "./parser.js";
 import { buildSkeleton } from "./skeleton.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
 import { detectLanguage } from "./registry.js";
-import { resolveImportPath } from "./resolver.js";
-import type { SkeletonFile } from "./types.js";
+import { resolveImportPath, getOrBuildCrossLangIndex } from "./resolver.js";
+import { resolveCrossLangTarget } from "./crosslang.js";
+import type { ImportRef, SkeletonFile } from "./types.js";
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
 export interface CallRef {
-  /** The callee expression as written in source, e.g. "sanitize" or "obj.method". */
   callee: string;
   line: number;
-  /** Relative path of the file the callee lives in (if cross-file). */
   calleeFileRel?: string;
-  /** True when the call target is a local symbol in the same file. */
   isLocal?: boolean;
-  /** True when the callee is an external package (not a relative import). */
   isExternal?: boolean;
 }
 
 export interface CalledByRef {
-  /** File that imports (and therefore likely calls) this function. */
   file: string;
 }
 
@@ -31,38 +27,99 @@ export interface CallGraphResult {
   file: string;
   function: string;
   functionRange: { startLine: number; endLine: number };
-  /** Functions/methods this function calls. */
   calls: CallRef[];
-  /** Files that import this function (reverse import lookup). */
   calledBy: CalledByRef[];
 }
 
-// ─── AST traversal ────────────────────────────────────────────────────────────
+const CROSS_LANG = new Set(["java", "csharp", "rust", "go"]);
+
+// ─── Call extraction ──────────────────────────────────────────────────────────
 
 interface RawCall {
   callee: string;
   line: number;
 }
 
-/** Recursively collect call expressions from a subtree. */
+function pushCall(out: RawCall[], callee: string | null, anchor: TSNode | null): void {
+  if (callee && anchor) out.push({ callee, line: anchor.startPosition.row + 1 });
+}
+
 function collectCalls(node: TSNode, out: RawCall[]): void {
-  // TypeScript / JavaScript / Go use "call_expression"; Python uses "call"
-  if (node.type === "call_expression" || node.type === "call") {
+  const t = node.type;
+
+  // ── call_expression: TS/JS (member_expression) | Python "call" (attribute) |
+  //    Go (selector_expression) | Rust (field_expression, scoped_identifier)
+  if (t === "call_expression" || t === "call") {
     const fn = node.childForFieldName("function");
     if (fn) {
       let callee: string | null = null;
-      if (fn.type === "identifier") {
-        callee = fn.text;
-      } else if (fn.type === "member_expression" || fn.type === "attribute") {
-        // TS/JS: member_expression with "object"/"property" fields
-        // Python: attribute with "object"/"attribute" fields
-        const obj = fn.childForFieldName("object");
-        const prop =
-          fn.childForFieldName("property") ?? fn.childForFieldName("attribute");
-        if (prop) callee = obj ? `${obj.text}.${prop.text}` : prop.text;
+      switch (fn.type) {
+        case "identifier":
+          callee = fn.text;
+          break;
+        case "member_expression":
+        case "attribute": {
+          const obj = fn.childForFieldName("object");
+          const prop = fn.childForFieldName("property") ?? fn.childForFieldName("attribute");
+          if (prop) callee = obj ? `${obj.text}.${prop.text}` : prop.text;
+          break;
+        }
+        case "field_expression": {
+          // Rust: inv.reserve — fields are `value` and `field`
+          const obj = fn.childForFieldName("value");
+          const fld = fn.childForFieldName("field");
+          if (fld) callee = obj ? `${obj.text}.${fld.text}` : fld.text;
+          break;
+        }
+        case "scoped_identifier":
+          // Rust: String::from / helpers::format — keep full path
+          callee = fn.text;
+          break;
+        case "selector_expression": {
+          // Go: pkg.Func
+          const obj = fn.childForFieldName("operand");
+          const fld = fn.childForFieldName("field");
+          if (fld) callee = obj ? `${obj.text}.${fld.text}` : fld.text;
+          break;
+        }
       }
-      if (callee) out.push({ callee, line: fn.startPosition.row + 1 });
+      pushCall(out, callee, fn);
     }
+  }
+
+  // ── Java method invocation
+  else if (t === "method_invocation") {
+    const name = node.childForFieldName("name");
+    const obj = node.childForFieldName("object");
+    if (name) pushCall(out, obj ? `${obj.text}.${name.text}` : name.text, name);
+  }
+
+  // ── C# invocation expression
+  else if (t === "invocation_expression") {
+    const fn = node.childForFieldName("function");
+    if (fn) pushCall(out, fn.text, fn);
+  }
+
+  // ── Java + C# constructor call: new Foo(...)
+  else if (t === "object_creation_expression") {
+    let typeNode: TSNode | null = node.childForFieldName("type");
+    if (!typeNode) {
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const c = node.namedChild(i);
+        if (
+          c &&
+          (c.type === "identifier" ||
+            c.type === "type_identifier" ||
+            c.type === "scoped_identifier" ||
+            c.type === "qualified_name" ||
+            c.type === "generic_type")
+        ) {
+          typeNode = c;
+          break;
+        }
+      }
+    }
+    if (typeNode) pushCall(out, `new ${typeNode.text}`, typeNode);
   }
 
   for (let i = 0; i < node.namedChildCount; i++) {
@@ -71,35 +128,28 @@ function collectCalls(node: TSNode, out: RawCall[]): void {
   }
 }
 
-/**
- * Walk the AST and return the first function/method node whose declared name
- * matches `name`. Handles:
- *   - function declarations (TS/JS/Go)
- *   - const/let arrow functions and function expressions (TS/JS)
- *   - method definitions inside classes (TS/JS)
- *   - function_definition (Python)
- *   - method_declaration (Go)
- */
+// ─── Function-node finder ─────────────────────────────────────────────────────
+
+const FUNCTION_NODE_TYPES = new Set([
+  "function_declaration",        // TS / JS / Go
+  "generator_function_declaration",
+  "method_definition",           // TS / JS class member
+  "method_signature",
+  "abstract_method_signature",
+  "function_definition",         // Python
+  "async_function_definition",   // Python async
+  "method_declaration",          // Go / Java / C#
+  "constructor_declaration",     // Java / C#
+  "function_item",               // Rust
+]);
+
 function findFunctionNode(root: TSNode, name: string): TSNode | null {
   function walk(node: TSNode): TSNode | null {
-    const t = node.type;
-
-    // Direct named functions / methods
-    if (
-      t === "function_declaration" ||
-      t === "generator_function_declaration" ||
-      t === "method_definition" ||
-      t === "method_signature" ||
-      t === "abstract_method_signature" ||
-      t === "function_definition" ||       // Python
-      t === "async_function_definition" || // Python async
-      t === "method_declaration"           // Go
-    ) {
+    if (FUNCTION_NODE_TYPES.has(node.type)) {
       if (node.childForFieldName("name")?.text === name) return node;
     }
-
-    // const foo = () => ... or const foo = function() ...
-    if (t === "variable_declarator") {
+    // const foo = () => ... | const foo = function() ...
+    if (node.type === "variable_declarator") {
       const declName = node.childForFieldName("name")?.text;
       const value = node.childForFieldName("value");
       if (
@@ -112,8 +162,6 @@ function findFunctionNode(root: TSNode, name: string): TSNode | null {
         return value;
       }
     }
-
-    // Recurse
     for (let i = 0; i < node.namedChildCount; i++) {
       const c = node.namedChild(i);
       if (c) {
@@ -123,47 +171,34 @@ function findFunctionNode(root: TSNode, name: string): TSNode | null {
     }
     return null;
   }
-
   return walk(root);
 }
 
-// ─── Destructuring alias tracker ─────────────────────────────────────────────
+// ─── Destructuring alias tracker (TS/JS only) ─────────────────────────────────
 
-/**
- * Walk a subtree and collect variable destructuring patterns where the source
- * is a known import. Handles:
- *   const { sign, verify } = jwt;          → sign/verify → (jwt's source)
- *   const { readFile: rf } = fs;           → rf → (fs's source)
- *   let { a, b } = someNamespace.nested;   → a/b → (someNamespace's source)
- *
- * Returns a map of localAlias → moduleSpecifier (same format as importMap).
- */
 function collectDestructuredAliases(
   node: TSNode,
-  importMap: Map<string, string>,
+  importMap: Map<string, ImportRef>,
 ): Map<string, string> {
   const aliases = new Map<string, string>();
-
   function walk(n: TSNode): void {
     if (n.type === "variable_declarator") {
       const nameNode = n.childForFieldName("name");
       const valueNode = n.childForFieldName("value");
       if (nameNode && valueNode && nameNode.type === "object_pattern") {
-        // value might be `jwt` or `jwt.utils` — base is the first identifier
         const baseName = valueNode.text.split(".")[0];
-        const origin = importMap.get(baseName) ?? aliases.get(baseName);
+        const originRef = importMap.get(baseName);
+        const origin = originRef?.from ?? aliases.get(baseName);
         if (origin) {
           for (let i = 0; i < nameNode.namedChildCount; i++) {
             const prop = nameNode.namedChild(i);
             if (!prop) continue;
-            // { sign } — shorthand
             if (
               prop.type === "shorthand_property_identifier_pattern" ||
               prop.type === "shorthand_property_identifier"
             ) {
               aliases.set(prop.text, origin);
             }
-            // { readFile: rf } — renamed
             if (prop.type === "pair_pattern") {
               const val = prop.childForFieldName("value");
               if (val) aliases.set(val.text, origin);
@@ -177,24 +212,58 @@ function collectDestructuredAliases(
       if (c) walk(c);
     }
   }
-
   walk(node);
   return aliases;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Base identifier of a callee expression ───────────────────────────────────
+
+/** Take the leftmost identifier from "obj.method" / "Pkg::func" / "new Foo". */
+function baseNameOf(callee: string): string {
+  let s = callee;
+  if (s.startsWith("new ")) s = s.slice(4);
+  return s.split(/::|\./)[0];
+}
+
+
+// ─── Cross-language calledBy scan helper ──────────────────────────────────────
+
+/** Last segment of a member-style callee — "Helper.fmt" -> "fmt", "compute" -> null. */
+function memberOf(callee: string): string | null {
+  const noNew = callee.startsWith("new ") ? callee.slice(4) : callee;
+  const parts = noNew.split(/::|\./);
+  return parts.length > 1 ? parts[parts.length - 1] : null;
+}
 
 /**
- * Build the call graph for a single named function.
- *
- * @param filePath   Absolute path to the source file.
- * @param funcName   Name of the function/method to analyse.
- * @param root       Project root (for computing relative paths).
- * @param allSkeletons  Optional: pre-parsed skeletons of the whole project,
- *                   used to find which files import (and thus call) this function.
- *
- * Returns null if the language is unsupported or the function is not found.
+ * Open a file, parse it, and check whether any call expression references
+ * `funcName` — either as a bare call `funcName(...)` or as the trailing
+ * member of a qualified call `X.funcName(...)` / `X::funcName(...)`.
+ * Used for C# / Go reverse calledBy where namespace/package imports do not
+ * name the called symbol.
  */
+async function fileCallsSymbol(fileAbs: string, funcName: string): Promise<boolean> {
+  const lang = detectLanguage(fileAbs);
+  if (!lang) return false;
+  let src: string;
+  try {
+    src = fs.readFileSync(fileAbs, "utf8");
+  } catch {
+    return false;
+  }
+  const root = await parseSource(lang.grammar, src);
+  const calls: RawCall[] = [];
+  collectCalls(root, calls);
+  for (const c of calls) {
+    if (c.callee === funcName) return true;
+    const m = memberOf(c.callee);
+    if (m === funcName) return true;
+  }
+  return false;
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 export async function buildCallGraph(
   filePath: string,
   funcName: string,
@@ -211,77 +280,165 @@ export async function buildCallGraph(
   const funcNode = findFunctionNode(rootNode, funcName);
   if (!funcNode) return null;
 
-  // Use the body subtree for call extraction (avoids counting the signature itself)
   const body = funcNode.childForFieldName("body") ?? funcNode;
 
   const rawCalls: RawCall[] = [];
   collectCalls(body, rawCalls);
 
-  // Parse the file's imports to resolve callee origins
   const opts = resolveOptions({ detail: "outline", emitHtml: false }, loadProjectConfig(root));
   const skel = await buildSkeleton(filePath, relPath, opts);
 
-  // localName → module specifier
-  const importMap = new Map<string, string>();
+  // localName -> full ImportRef (so cross-lang resolution has the flags it needs)
+  const importMap = new Map<string, ImportRef>();
   for (const imp of skel.imports ?? []) {
     if (imp.symbol !== "*" && !imp.isSideEffect) {
-      importMap.set(imp.alias ?? imp.symbol, imp.from);
+      importMap.set(imp.alias ?? imp.symbol, imp);
     }
   }
 
   const localNames = new Set(skel.symbols.map((s) => s.name));
-
-  // Track destructured aliases within the function body
-  // e.g. const { sign } = jwt  →  sign maps to the same source as jwt
   const destructuredAliases = collectDestructuredAliases(body, importMap);
 
-  // Deduplicate by callee+line and resolve origins
+  // Build cross-lang index lazily — needed for Java/C#/Rust dispatch.
+  const isCrossLang = CROSS_LANG.has(skel.language);
+  const crossIndex = isCrossLang ? await getOrBuildCrossLangIndex(root) : null;
+
   const calls: CallRef[] = [];
   const seen = new Set<string>();
+
   for (const { callee, line } of rawCalls) {
     const key = `${callee}:${line}`;
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const baseName = callee.split(".")[0];
-    // Check import map first, then destructured aliases
-    const importFrom = importMap.get(baseName) ?? destructuredAliases.get(baseName);
+    const base = baseNameOf(callee);
+    const importRef = importMap.get(base);
+    const aliasOrigin = destructuredAliases.get(base);
+
     const call: CallRef = { callee, line };
 
-    if (importFrom) {
-      if (importFrom.startsWith(".")) {
-        const resolvedAbs = resolveImportPath(importFrom, filePath);
+    if (importRef) {
+      if (isCrossLang && crossIndex) {
+        const target = resolveCrossLangTarget(importRef, skel, filePath, root, crossIndex);
+        if (target) {
+          if (target.kind === "symbol") call.calleeFileRel = target.file;
+          else if (target.files.length > 0) call.calleeFileRel = target.files[0];
+        } else {
+          call.isExternal = true;
+          call.calleeFileRel = importRef.from;
+        }
+      } else if (importRef.from.startsWith(".")) {
+        const resolvedAbs = resolveImportPath(importRef.from, filePath);
         if (resolvedAbs) {
           call.calleeFileRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
         }
       } else {
         call.isExternal = true;
-        call.calleeFileRel = importFrom;
+        call.calleeFileRel = importRef.from;
       }
-    } else if (localNames.has(baseName)) {
+    } else if (aliasOrigin) {
+      // Destructured aliases are TS/JS only (always relative or external).
+      if (aliasOrigin.startsWith(".")) {
+        const resolvedAbs = resolveImportPath(aliasOrigin, filePath);
+        if (resolvedAbs) {
+          call.calleeFileRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
+        }
+      } else {
+        call.isExternal = true;
+        call.calleeFileRel = aliasOrigin;
+      }
+    } else if (crossIndex && skel.language === "csharp") {
+      // C# `using App.Models;` makes types visible without naming them.
+      // Try `<usingNs>.<base>` against the type-by-fqn index.
+      for (const ns of skel.imports ?? []) {
+        if (!ns.isNamespaceImport) continue;
+        const f = crossIndex.csharpTypes.get(`${ns.from}.${base}`);
+        if (f && f !== skel.file) { call.calleeFileRel = f; break; }
+      }
+      if (!call.calleeFileRel && localNames.has(base)) call.isLocal = true;
+    } else if (crossIndex && skel.language === "java") {
+      // Java wildcard import: `import com.example.*;` doesn't name the type.
+      for (const wc of skel.imports ?? []) {
+        if (wc.symbol !== "*") continue;
+        const f = crossIndex.javaFqcn.get(`${wc.from}.${base}`);
+        if (f && f !== skel.file) { call.calleeFileRel = f; break; }
+      }
+      if (!call.calleeFileRel && localNames.has(base)) call.isLocal = true;
+    } else if (localNames.has(base)) {
       call.isLocal = true;
     }
 
     calls.push(call);
   }
 
-  // calledBy: files that import this function (reverse import lookup)
+  // ── calledBy: who imports this function? ────────────────────────────────
   const calledBy: CalledByRef[] = [];
   if (allSkeletons) {
     for (const otherSkel of allSkeletons) {
       if (otherSkel.file === relPath) continue;
+      const otherIsCrossLang = CROSS_LANG.has(otherSkel.language);
+      const otherAbs = path.resolve(root, otherSkel.file);
+
       for (const imp of otherSkel.imports ?? []) {
         const importedName = imp.alias ?? imp.symbol;
         if (importedName !== funcName && imp.symbol !== funcName) continue;
-        if (!imp.from.startsWith(".")) continue;
-        const otherAbs = path.resolve(root, otherSkel.file);
-        const resolvedAbs = resolveImportPath(imp.from, otherAbs);
-        if (!resolvedAbs) continue;
-        const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
-        if (resolvedRel === relPath) {
-          calledBy.push({ file: otherSkel.file });
+
+        if (otherIsCrossLang) {
+          // Symbol-level cross-lang match only — file/namespace edges are too
+          // broad to claim "this file calls funcName".
+          if (!crossIndex) continue;
+          const target = resolveCrossLangTarget(imp, otherSkel, otherAbs, root, crossIndex);
+          if (target && target.kind === "symbol" && target.file === relPath && target.symbol === funcName) {
+            calledBy.push({ file: otherSkel.file });
+            break;
+          }
+        } else if (imp.from.startsWith(".")) {
+          const resolvedAbs = resolveImportPath(imp.from, otherAbs);
+          if (!resolvedAbs) continue;
+          const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
+          if (resolvedRel === relPath) {
+            calledBy.push({ file: otherSkel.file });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Extra pass: for C# / Go, the cross-lang resolver gives file-level targets
+  // (namespace / package) so the loop above misses callers that only show up
+  // via name-resolution at the call site. Scan candidate files' call sites.
+  if (
+    allSkeletons &&
+    crossIndex &&
+    (skel.language === "csharp" || skel.language === "go")
+  ) {
+    const seenFiles = new Set(calledBy.map((c) => c.file));
+    for (const otherSkel of allSkeletons) {
+      if (otherSkel.file === relPath) continue;
+      if (otherSkel.language !== skel.language) continue;
+      if (seenFiles.has(otherSkel.file)) continue;
+      const otherAbs = path.resolve(root, otherSkel.file);
+
+      // Confirm this other file imports / uses something that resolves to us.
+      let importsUs = false;
+      for (const imp of otherSkel.imports ?? []) {
+        const target = resolveCrossLangTarget(imp, otherSkel, otherAbs, root, crossIndex);
+        if (!target) continue;
+        if (target.kind === "file" && target.files.includes(relPath)) {
+          importsUs = true;
           break;
         }
+        if (target.kind === "symbol" && target.file === relPath) {
+          importsUs = true;
+          break;
+        }
+      }
+      if (!importsUs) continue;
+
+      if (await fileCallsSymbol(otherAbs, funcName)) {
+        calledBy.push({ file: otherSkel.file });
+        seenFiles.add(otherSkel.file);
       }
     }
   }
