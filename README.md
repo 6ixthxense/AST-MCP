@@ -4,16 +4,18 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C#
+**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift
 
-| Capability               | TS/JS | Python | Go  | Rust | Java | C#  |
-|--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|
-| Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
-| Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
-| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
-| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
-| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
-| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  |
+| Capability               | TS/JS | Python | Go  | Rust | Java | C#  | C   | C++ | Kt  | Swift |
+|--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|
+| Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
+| Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
+| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
+| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
+| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
+| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
+
+> v0.8.0 introduces **symbol extraction + imports parsing** for C / C++ / Kotlin / Swift. Graph/resolver/callgraph dispatch for these four lands in a follow-up release. (Ruby grammar in `tree-sitter-wasms@0.1.13` is unstable and was skipped.)
 
 Each language uses the resolution strategy that fits it:
 - **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting.
@@ -478,6 +480,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.8.0** | **4 new languages: C · C++ · Kotlin · Swift** — symbol extraction + imports parsing. C++ tracks access_specifier through class bodies. Kotlin handles `package`/`object`/`data class`. Swift handles `class`/`struct`/`enum` (all under `class_declaration`) and `protocol_declaration`. Ruby grammar in tree-sitter-wasms@0.1.13 is unstable — skipped. |
 | **0.7.0** | Go full resolution (reads `go.mod`, resolves package-as-directory) · C# reverse `calledBy` via call-site scanning · `csharpTypes` index lets `using` directives resolve to specific types · 4-suite test harness (smoke + graph-smoke + resolver-smoke + callgraph-smoke) |
 | **0.6.0** | **3 new languages: Rust · Java · C#** (extractors + import parsing) · cross-language resolver in `crosslang.ts` (Java FQCN index, C# namespace index, Rust `crate::` module walk) · symbol-graph `imports` edges + `resolveFileImports` enrichment + `get_call_graph` callee resolution rewired through it · Java `package` and C# `namespace` captured as directives |
 | **0.5.3** | Auto-install `/ast-map` Claude Code skill on `npm install` · `postinstall` writes `~/.claude/skills/ast-map/SKILL.md` + registers trigger in `CLAUDE.md` (idempotent, CI-safe) |

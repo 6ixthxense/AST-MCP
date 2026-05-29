@@ -7,6 +7,10 @@ import { extractGo, extractImportsGo } from "./extractors/go.js";
 import { extractRust, extractImportsRust } from "./extractors/rust.js";
 import { extractJava, extractDirectivesJava, extractImportsJava } from "./extractors/java.js";
 import { extractCSharp, extractDirectivesCSharp, extractImportsCSharp } from "./extractors/csharp.js";
+import { extractC, extractImportsC } from "./extractors/c.js";
+import { extractCpp, extractImportsCpp } from "./extractors/cpp.js";
+import { extractKotlin, extractDirectivesKotlin, extractImportsKotlin } from "./extractors/kotlin.js";
+import { extractSwift, extractImportsSwift } from "./extractors/swift.js";
 
 export interface LanguageEntry {
   language: string;
@@ -38,19 +42,30 @@ const BY_EXT: Record<string, LanguageEntry> = {
   ".go": { language: "go", grammar: "go", extract: extractGo, extractImports: extractImportsGo },
   ".rs": { language: "rust", grammar: "rust", extract: extractRust, extractImports: extractImportsRust },
   ".java": {
-    language: "java",
-    grammar: "java",
-    extract: extractJava,
-    extractDirectives: extractDirectivesJava,
-    extractImports: extractImportsJava,
+    language: "java", grammar: "java",
+    extract: extractJava, extractDirectives: extractDirectivesJava, extractImports: extractImportsJava,
   },
   ".cs": {
-    language: "csharp",
-    grammar: "c_sharp",
-    extract: extractCSharp,
-    extractDirectives: extractDirectivesCSharp,
-    extractImports: extractImportsCSharp,
+    language: "csharp", grammar: "c_sharp",
+    extract: extractCSharp, extractDirectives: extractDirectivesCSharp, extractImports: extractImportsCSharp,
   },
+  ".c": { language: "c", grammar: "c", extract: extractC, extractImports: extractImportsC },
+  ".h": { language: "c", grammar: "c", extract: extractC, extractImports: extractImportsC },
+  ".cpp": { language: "cpp", grammar: "cpp", extract: extractCpp, extractImports: extractImportsCpp },
+  ".cxx": { language: "cpp", grammar: "cpp", extract: extractCpp, extractImports: extractImportsCpp },
+  ".cc":  { language: "cpp", grammar: "cpp", extract: extractCpp, extractImports: extractImportsCpp },
+  ".hpp": { language: "cpp", grammar: "cpp", extract: extractCpp, extractImports: extractImportsCpp },
+  ".hxx": { language: "cpp", grammar: "cpp", extract: extractCpp, extractImports: extractImportsCpp },
+  ".hh":  { language: "cpp", grammar: "cpp", extract: extractCpp, extractImports: extractImportsCpp },
+  ".kt": {
+    language: "kotlin", grammar: "kotlin",
+    extract: extractKotlin, extractDirectives: extractDirectivesKotlin, extractImports: extractImportsKotlin,
+  },
+  ".kts": {
+    language: "kotlin", grammar: "kotlin",
+    extract: extractKotlin, extractDirectives: extractDirectivesKotlin, extractImports: extractImportsKotlin,
+  },
+  ".swift": { language: "swift", grammar: "swift", extract: extractSwift, extractImports: extractImportsSwift },
 };
 
 export function detectLanguage(filePath: string): LanguageEntry | null {
