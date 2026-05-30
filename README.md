@@ -10,12 +10,12 @@ Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex
 |--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|
 | Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
 | Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
-| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
-| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
-| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
-| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | —   | —     |
+| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | —     |
+| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | —     |
+| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
+| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
 
-> v0.8.0 introduces **symbol extraction + imports parsing** for C / C++ / Kotlin / Swift. Graph/resolver/callgraph dispatch for these four lands in a follow-up release. (Ruby grammar in `tree-sitter-wasms@0.1.13` is unstable and was skipped.)
+> v0.8.1 wires **cross-file graph, resolver, and call-graph** support for **Kotlin** and **C/C++** (Kotlin FQCN/package index; C/C++ `#include` resolution with header↔impl pairing). C/C++ call-site callee origin stays limited because `#include` doesn't name symbols. **Swift** remains symbol-extraction + imports only. (Ruby grammar in `tree-sitter-wasms@0.1.13` is unstable and was skipped.)
 
 Each language uses the resolution strategy that fits it:
 - **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting.
@@ -23,6 +23,8 @@ Each language uses the resolution strategy that fits it:
 - **Rust** — `Cargo.toml` ancestor → `crate::` / `self::` / `super::` walks; supports `mod.rs` + Rust-2018 sibling-dir style.
 - **Java** — project-wide FQCN index (`package + "." + className → file`) built lazily on first cross-lang call; supports wildcard imports.
 - **C#** — namespace-to-files index plus a `<ns>.<TypeName>` index so `using App.Models` + `new Inventory()` resolves to the right file.
+- **Kotlin** — project-wide FQCN index (`package + "." + ClassName → file`), like Java; wildcard `import pkg.*` pulls every file in the package.
+- **C / C++** — `#include "..."` resolved against the including file's directory; headers auto-paired with same-name `.c`/`.cpp`/`.cc`/`.cxx` impl files. `<system>` includes stay external.
 
 For C# and Go (where imports don't name the called symbol), reverse `calledBy` falls back to **call-site scanning** of candidate files.
 
