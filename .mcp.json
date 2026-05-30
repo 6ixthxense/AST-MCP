@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ast-mapper": {
+      "command": "node",
+      "args": ["C:\\Mickey\\AST-MCP\\AST-MCP\\dist\\index.js"],
+      "env": {
+        "AST_MAP_ROOT": "C:\\Mickey\\AST-MCP\\AST-MCP"
+      }
+    }
+  }
+}

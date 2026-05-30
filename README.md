@@ -10,12 +10,12 @@ Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex
 |--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|
 | Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
 | Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
-| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | —     |
-| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | —     |
+| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
+| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
 | Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
 | Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
 
-> v0.8.1 wires **cross-file graph, resolver, and call-graph** support for **Kotlin** and **C/C++** (Kotlin FQCN/package index; C/C++ `#include` resolution with header↔impl pairing). C/C++ call-site callee origin stays limited because `#include` doesn't name symbols. **Swift** remains symbol-extraction + imports only. (Ruby grammar in `tree-sitter-wasms@0.1.13` is unstable and was skipped.)
+> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. (Ruby grammar in `tree-sitter-wasms@0.1.13` is unstable and was skipped.)
 
 Each language uses the resolution strategy that fits it:
 - **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting.
@@ -292,7 +292,7 @@ Parse a function body → extract every call expression, resolve callees via the
 ```
 
 Supports all 8 languages with per-language call extraction (TS/JS `member_expression`, Rust `field_expression`/`scoped_identifier`, Java `method_invocation`, C# `invocation_expression`, etc.) and constructor calls (`new Foo`).  
-Handles TS/JS destructured aliases (`const { sign } = jwt`), Java FQCN imports, C# `using` namespaces (via project-wide type index), Rust `use crate::path::Item`, Go `pkg.Func` (via go.mod module path). Reverse `calledBy` uses call-site scanning for C# and Go where import statements don't name the called symbol.
+Handles TS/JS destructured aliases (`const { sign } = jwt`), Java FQCN imports, C# `using` namespaces (via project-wide type index), Rust `use crate::path::Item`, Go `pkg.Func` (via go.mod module path), Kotlin FQCN/package imports, C/C++ `#include`, and Swift module imports (`import <Module>` → files under `Sources/<Module>/`). Reverse `calledBy` uses call-site scanning for C# and Go where import statements don't name the called symbol.
 
 **Params:** `path`, `function`, `scanDir`
 
@@ -482,6 +482,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.8.2** | **Swift cross-file wiring** — `import <Module>` resolves to that module's files (module = the `Sources/<Module>/` directory, else parent dir), wired into `build_symbol_graph` + `resolve_imports`. System modules (Foundation, UIKit, …) stay external. Completes cross-file graph/resolver support for all four v0.8.0 languages. |
 | **0.8.1** | **Cross-file graph wiring for Kotlin & C/C++** — Kotlin FQCN/package index + C/C++ `#include` resolution (with header↔impl pairing) wired into `build_symbol_graph`, `resolve_imports`, and `get_call_graph`. Fixes a parse-cache rel-path leak (stale `.file` poisoned the cross-lang index → doubled paths) and Kotlin call-graph extraction (`function_declaration` name + field-less `call_expression`). |
 | **0.8.0** | **4 new languages: C · C++ · Kotlin · Swift** — symbol extraction + imports parsing. C++ tracks access_specifier through class bodies. Kotlin handles `package`/`object`/`data class`. Swift handles `class`/`struct`/`enum` (all under `class_declaration`) and `protocol_declaration`. Ruby grammar in tree-sitter-wasms@0.1.13 is unstable — skipped. |
 | **0.7.0** | Go full resolution (reads `go.mod`, resolves package-as-directory) · C# reverse `calledBy` via call-site scanning · `csharpTypes` index lets `using` directives resolve to specific types · 4-suite test harness (smoke + graph-smoke + resolver-smoke + callgraph-smoke) |

@@ -19,6 +19,8 @@ export interface CrossLangIndex {
   kotlinFqcn: Map<string, string>;
   /** Kotlin: package -> list of relFiles (for wildcard imports). */
   kotlinPackages: Map<string, string[]>;
+  /** Swift: module name (dir under Sources/, else parent dir) -> relFiles. */
+  swiftModules: Map<string, string[]>;
 }
 
 const TYPE_KINDS = new Set(["class", "interface", "enum", "struct"]);
@@ -51,6 +53,7 @@ export function buildCrossLangIndex(skeletons: SkeletonFile[]): CrossLangIndex {
     csharpTypes: new Map(),
     kotlinFqcn: new Map(),
     kotlinPackages: new Map(),
+    swiftModules: new Map(),
   };
 
   for (const skel of skeletons) {
@@ -88,10 +91,30 @@ export function buildCrossLangIndex(skeletons: SkeletonFile[]): CrossLangIndex {
       for (const sym of topTypeSymbols(skel.symbols)) {
         index.kotlinFqcn.set(`${pkg}.${sym.name}`, skel.file);
       }
+    } else if (skel.language === "swift") {
+      const mod = swiftModuleOf(skel.file);
+      if (!mod) continue;
+      const arr = index.swiftModules.get(mod) ?? [];
+      arr.push(skel.file);
+      index.swiftModules.set(mod, arr);
     }
   }
 
   return index;
+}
+
+/**
+ * Derive a Swift module name from a project-relative file path.
+ * SwiftPM convention: sources live under `Sources/<ModuleName>/...`, so the
+ * module is the path segment right after `Sources`. For flat layouts we fall
+ * back to the immediate parent directory name. Returns null for bare files.
+ */
+function swiftModuleOf(relFile: string): string | null {
+  const parts = relFile.split("/");
+  const srcIdx = parts.lastIndexOf("Sources");
+  if (srcIdx >= 0 && srcIdx + 1 < parts.length - 1) return parts[srcIdx + 1];
+  if (parts.length >= 2) return parts[parts.length - 2];
+  return null;
 }
 
 /* ─── Rust module resolution ──────────────────────────────────────────────── */
@@ -432,6 +455,18 @@ export function resolveCrossLangTarget(
     const filtered = files.filter((f) => f !== skel.file);
     if (filtered.length === 0) return null;
     return { kind: "file", files: filtered };
+  }
+
+  if (skel.language === "swift") {
+    // `import <Module>` brings in another in-project module's public symbols
+    // (no symbol named). Resolve to that module's files; unknown modules
+    // (Foundation, UIKit, …) are external.
+    const files = index.swiftModules.get(imp.from);
+    if (files && files.length > 0) {
+      const filtered = files.filter((f) => f !== skel.file);
+      if (filtered.length > 0) return { kind: "file", files: filtered };
+    }
+    return null;
   }
 
   return null;

@@ -126,5 +126,25 @@ console.log("\nC++");
   check("C++: importKind = relative (in-project)", inv?.importKind === "relative");
 }
 
+// ─── Swift ──────────────────────────────────────────────────────────────
+console.log("\nSwift");
+{
+  const root = path.join(fixtures, "swift");
+  const refs = await resolveOne(root, "Sources/Service/InventoryService.swift");
+  console.log("    ", JSON.stringify(refs));
+  const inv = refs.find(r => r.from === "Inventory");
+  check("Swift: import Inventory resolved", !!inv);
+  check("Swift: resolvedRel = Sources/Inventory/Inventory.swift",
+    inv?.resolvedRel === "Sources/Inventory/Inventory.swift");
+  check("Swift: found = true", inv?.found === true);
+  check("Swift: importKind = relative (in-project module)", inv?.importKind === "relative");
+
+  // System module stays external.
+  const refsInv = await resolveOne(root, "Sources/Inventory/Inventory.swift");
+  const fnd = refsInv.find(r => r.from === "Foundation");
+  check("Swift: import Foundation flagged external",
+    fnd?.importKind === "external" && fnd?.found === false);
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

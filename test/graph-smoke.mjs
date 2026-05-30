@@ -133,5 +133,21 @@ console.log("\nC++ (#include with header→impl pairing)");
     importEdges.some(e => e.from === "service.cpp" && e.to === "inventory.cpp"));
 }
 
+// ─── Swift (module import edge) ────────────────────────────────────────
+console.log("\nSwift (import <Module> → module files)");
+{
+  const root = path.join(fixtures, "swift");
+  const { graph } = await buildGraph(root, [
+    "Sources/Inventory/Inventory.swift",
+    "Sources/Service/InventoryService.swift",
+  ]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges));
+  check("Swift: at least one import edge", importEdges.length > 0);
+  check("Swift: Service -> Inventory module file",
+    importEdges.some(e => e.from === "Sources/Service/InventoryService.swift"
+      && e.to === "Sources/Inventory/Inventory.swift"));
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

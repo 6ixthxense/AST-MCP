@@ -31,7 +31,7 @@ export interface CallGraphResult {
   calledBy: CalledByRef[];
 }
 
-const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp"]);
+const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp", "swift"]);
 
 // ─── Call extraction ──────────────────────────────────────────────────────────
 
