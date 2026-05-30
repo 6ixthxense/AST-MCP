@@ -31,7 +31,7 @@ export interface CallGraphResult {
   calledBy: CalledByRef[];
 }
 
-const CROSS_LANG = new Set(["java", "csharp", "rust", "go"]);
+const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp"]);
 
 // ─── Call extraction ──────────────────────────────────────────────────────────
 
@@ -84,6 +84,18 @@ function collectCalls(node: TSNode, out: RawCall[]): void {
         }
       }
       pushCall(out, callee, fn);
+    } else {
+      // Kotlin: call_expression has no `function` field — the callee is the
+      // first named child (a simple_identifier for `Foo(...)` / a bare call,
+      // or a navigation_expression for `obj.method(...)`).
+      const callee0 = node.namedChild(0);
+      if (callee0) {
+        if (callee0.type === "simple_identifier" || callee0.type === "identifier") {
+          pushCall(out, callee0.text, callee0);
+        } else if (callee0.type === "navigation_expression") {
+          pushCall(out, callee0.text.replace(/\s+/g, ""), callee0);
+        }
+      }
     }
   }
 
@@ -146,7 +158,14 @@ const FUNCTION_NODE_TYPES = new Set([
 function findFunctionNode(root: TSNode, name: string): TSNode | null {
   function walk(node: TSNode): TSNode | null {
     if (FUNCTION_NODE_TYPES.has(node.type)) {
-      if (node.childForFieldName("name")?.text === name) return node;
+      const named = node.childForFieldName("name");
+      if (named?.text === name) return node;
+      // Kotlin: function_declaration exposes its name as a simple_identifier
+      // child, not via a `name` field.
+      if (!named && node.type === "function_declaration") {
+        const id = node.namedChild(0);
+        if (id?.type === "simple_identifier" && id.text === name) return node;
+      }
     }
     // const foo = () => ... | const foo = function() ...
     if (node.type === "variable_declarator") {

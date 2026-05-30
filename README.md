@@ -480,6 +480,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.8.1** | **Cross-file graph wiring for Kotlin & C/C++** — Kotlin FQCN/package index + C/C++ `#include` resolution (with header↔impl pairing) wired into `build_symbol_graph`, `resolve_imports`, and `get_call_graph`. Fixes a parse-cache rel-path leak (stale `.file` poisoned the cross-lang index → doubled paths) and Kotlin call-graph extraction (`function_declaration` name + field-less `call_expression`). |
 | **0.8.0** | **4 new languages: C · C++ · Kotlin · Swift** — symbol extraction + imports parsing. C++ tracks access_specifier through class bodies. Kotlin handles `package`/`object`/`data class`. Swift handles `class`/`struct`/`enum` (all under `class_declaration`) and `protocol_declaration`. Ruby grammar in tree-sitter-wasms@0.1.13 is unstable — skipped. |
 | **0.7.0** | Go full resolution (reads `go.mod`, resolves package-as-directory) · C# reverse `calledBy` via call-site scanning · `csharpTypes` index lets `using` directives resolve to specific types · 4-suite test harness (smoke + graph-smoke + resolver-smoke + callgraph-smoke) |
 | **0.6.0** | **3 new languages: Rust · Java · C#** (extractors + import parsing) · cross-language resolver in `crosslang.ts` (Java FQCN index, C# namespace index, Rust `crate::` module walk) · symbol-graph `imports` edges + `resolveFileImports` enrichment + `get_call_graph` callee resolution rewired through it · Java `package` and C# `namespace` captured as directives |

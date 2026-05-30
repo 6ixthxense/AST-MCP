@@ -97,5 +97,41 @@ console.log("\nGo (module path + package directory)");
       e.to === "inventory/inventory.go"));
 }
 
+// ─── Kotlin ─────────────────────────────────────────────────────────────
+console.log("\nKotlin (cross-package FQCN)");
+{
+  const root = path.join(fixtures, "kotlin", "src");
+  const { graph, skels } = await buildGraph(root, [
+    "com/example/Inventory.kt",
+    "com/example/services/InventoryService.kt",
+  ]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges));
+  const invDir = skels.find(s => s.file === "com/example/Inventory.kt");
+  check("Kotlin: package directive captured", invDir?.directives?.includes("package:com.example") === true);
+  check("Kotlin: at least one import edge", importEdges.length > 0);
+  check("Kotlin: InventoryService.kt -> Inventory.kt::Inventory (symbol-level)",
+    importEdges.some(e =>
+      e.from === "com/example/services/InventoryService.kt" &&
+      e.to === "com/example/Inventory.kt::Inventory"));
+}
+
+// ─── C++ (#include header→impl pairing) ────────────────────────────────
+console.log("\nC++ (#include with header→impl pairing)");
+{
+  const root = path.join(fixtures, "cpp");
+  const { graph } = await buildGraph(root, [
+    "inventory.h",
+    "inventory.cpp",
+    "service.cpp",
+  ]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges));
+  check("C++: at least one import edge", importEdges.length > 0);
+  check("C++: service.cpp -> inventory.h", importEdges.some(e => e.from === "service.cpp" && e.to === "inventory.h"));
+  check("C++: service.cpp -> inventory.cpp (header→impl pairing)",
+    importEdges.some(e => e.from === "service.cpp" && e.to === "inventory.cpp"));
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

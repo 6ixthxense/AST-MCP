@@ -214,7 +214,10 @@ export function buildSymbolGraph(skeletons: SkeletonFile[], root: string): Symbo
         skel.language === "java" ||
         skel.language === "csharp" ||
         skel.language === "rust" ||
-        skel.language === "go"
+        skel.language === "go" ||
+        skel.language === "kotlin" ||
+        skel.language === "c" ||
+        skel.language === "cpp"
       ) {
         wireCrossLangImport(skel, imp, fromFileAbs, root, crossIndex, exportedSymbolMap, edges);
       }

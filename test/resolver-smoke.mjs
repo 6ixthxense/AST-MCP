@@ -99,5 +99,32 @@ console.log("\nGo");
   check("Go file with no imports yields empty refs", refs2.length === 0);
 }
 
+// ─── Kotlin ─────────────────────────────────────────────────────────────
+console.log("\nKotlin");
+{
+  const root = path.join(fixtures, "kotlin", "src");
+  const refs = await resolveOne(root, "com/example/services/InventoryService.kt");
+  console.log("    ", JSON.stringify(refs));
+  const inv = refs.find(r => r.symbol === "Inventory");
+  check("Kotlin: Inventory import resolved", !!inv);
+  check("Kotlin: resolvedRel = Inventory.kt", inv?.resolvedRel === "com/example/Inventory.kt");
+  check("Kotlin: found = true", inv?.found === true);
+  check("Kotlin: kind = class", inv?.kind === "class");
+  check("Kotlin: importKind = relative (in-project)", inv?.importKind === "relative");
+}
+
+// ─── C++ ────────────────────────────────────────────────────────────────
+console.log("\nC++");
+{
+  const root = path.join(fixtures, "cpp");
+  const refs = await resolveOne(root, "service.cpp");
+  console.log("    ", JSON.stringify(refs));
+  const inv = refs.find(r => r.from === "inventory.h");
+  check("C++: #include resolved", !!inv);
+  check("C++: resolvedRel = inventory.h", inv?.resolvedRel === "inventory.h");
+  check("C++: found = true", inv?.found === true);
+  check("C++: importKind = relative (in-project)", inv?.importKind === "relative");
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

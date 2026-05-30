@@ -98,7 +98,7 @@ export async function getOrBuildCrossLangIndex(root: string): Promise<CrossLangI
       const ext = path.extname(abs).toLowerCase();
       // Only Java/C# contribute to the index (Rust resolves via direct
       // module-path walk against the filesystem, no index needed).
-      if (ext !== ".java" && ext !== ".cs") continue;
+      if (ext !== ".java" && ext !== ".cs" && ext !== ".kt" && ext !== ".kts") continue;
       const rel = path.relative(key, abs).split(path.sep).join("/");
       try {
         skels.push(await buildSkeleton(abs, rel, opts));
@@ -217,7 +217,7 @@ function assembleResolved(
 
 /* ─── Public entry point ──────────────────────────────────────────────────── */
 
-const CROSS_LANG = new Set(["java", "csharp", "rust", "go"]);
+const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp"]);
 
 export async function resolveFileImports(
   skel: SkeletonFile,

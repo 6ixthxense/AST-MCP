@@ -169,5 +169,28 @@ console.log("\nC# reverse calledBy (call-site scan via `using`)");
     cg?.calledBy.some(c => c.file === "Service.cs") ?? false);
 }
 
+// ─── Kotlin (FQCN constructor call) ─────────────────────────────────────
+console.log("\nKotlin (constructor call across packages)");
+{
+  clearCrossLangIndexCache();
+  const root = path.join(fixtures, "kotlin", "src");
+  const skels = await buildSkels(root, [
+    "com/example/Inventory.kt",
+    "com/example/services/InventoryService.kt",
+  ]);
+  const cg = await buildCallGraph(
+    path.join(root, "com/example/services/InventoryService.kt"),
+    "make",
+    root,
+    skels,
+  );
+  console.log("    Kotlin calls:", JSON.stringify(cg?.calls));
+  check("Kotlin: make() found", !!cg);
+  const invCall = cg?.calls.find(c => c.callee === "Inventory");
+  check("Kotlin: Inventory(...) call captured", !!invCall);
+  check("Kotlin: resolved to com/example/Inventory.kt",
+    invCall?.calleeFileRel === "com/example/Inventory.kt");
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

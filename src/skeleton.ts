@@ -61,9 +61,15 @@ export async function buildSkeleton(
     );
   }
 
-  // Return cached result if file hasn't changed
+  // Return cached result if file hasn't changed. The cached SkeletonFile's
+  // `.file` is whatever relPath the first caller used; the same absolute file
+  // can be requested under a different root (different relPath), so override
+  // `.file` per call to avoid leaking a stale rel path into callers/indexes.
   const cached = getCached(absPath, opts.detail);
-  if (cached) return cached;
+  if (cached) {
+    const wantFile = relPath.split(path.sep).join("/");
+    return cached.file === wantFile ? cached : { ...cached, file: wantFile };
+  }
 
   const source = fs.readFileSync(absPath, "utf8");
   const root = await parseSource(entry.grammar, source);

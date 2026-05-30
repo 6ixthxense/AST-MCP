@@ -15,6 +15,10 @@ export interface CrossLangIndex {
   csharpNamespaces: Map<string, string[]>;
   /** C#: "App.Models.Inventory" -> relFile that declares it (for `using <ns>` + bare type lookup). */
   csharpTypes: Map<string, string>;
+  /** Kotlin: "com.example.Foo" -> relFile (FQCN-style, mirrors Java). */
+  kotlinFqcn: Map<string, string>;
+  /** Kotlin: package -> list of relFiles (for wildcard imports). */
+  kotlinPackages: Map<string, string[]>;
 }
 
 const TYPE_KINDS = new Set(["class", "interface", "enum", "struct"]);
@@ -45,6 +49,8 @@ export function buildCrossLangIndex(skeletons: SkeletonFile[]): CrossLangIndex {
     javaPackages: new Map(),
     csharpNamespaces: new Map(),
     csharpTypes: new Map(),
+    kotlinFqcn: new Map(),
+    kotlinPackages: new Map(),
   };
 
   for (const skel of skeletons) {
@@ -72,6 +78,15 @@ export function buildCrossLangIndex(skeletons: SkeletonFile[]): CrossLangIndex {
         for (const ns of namespaces) {
           index.csharpTypes.set(`${ns}.${sym.name}`, skel.file);
         }
+      }
+    } else if (skel.language === "kotlin") {
+      const pkg = getDirectiveValue(skel, "package:");
+      if (!pkg) continue;
+      const pkgFiles = index.kotlinPackages.get(pkg) ?? [];
+      pkgFiles.push(skel.file);
+      index.kotlinPackages.set(pkg, pkgFiles);
+      for (const sym of topTypeSymbols(skel.symbols)) {
+        index.kotlinFqcn.set(`${pkg}.${sym.name}`, skel.file);
       }
     }
   }
@@ -290,6 +305,57 @@ export function clearGoModuleCache(): void {
   goModuleCache.clear();
 }
 
+
+/* ─── C / C++ #include resolution ─────────────────────────────────────────── */
+
+const HEADER_EXTS = [".h", ".hpp", ".hxx", ".hh"];
+const IMPL_EXTS = [".c", ".cpp", ".cc", ".cxx"];
+
+/**
+ * Resolve a C/C++ `#include "foo.h"` to in-project files.
+ * Convention: also pair foo.h with foo.c/.cpp in the same directory so the
+ * graph captures the header → impl relationship.
+ * `#include <foo.h>` (system headers) returns null (external).
+ */
+export function resolveCInclude(
+  importFrom: string,
+  fromAbs: string,
+  projectRoot: string,
+): string[] | null {
+  // System headers like stdio.h, vector, etc. — leave to external.
+  const isSystemHeader =
+    !importFrom.includes("/") && !importFrom.includes(".") ||
+    /^(stdio|stdlib|string|vector|memory|cstdint|cstdlib|cstring|iostream)/.test(importFrom);
+  // We only check the actual filesystem; if a system header happens to exist
+  // locally we still link it, otherwise it falls through to null.
+
+  const fromDir = path.dirname(fromAbs);
+  const headerAbs = path.resolve(fromDir, importFrom);
+  const out: string[] = [];
+
+  if (existsFile(headerAbs)) {
+    const rel = path.relative(projectRoot, headerAbs).split(path.sep).join("/");
+    // Reject paths that escape the project root.
+    if (!rel.startsWith("..")) out.push(rel);
+
+    // Pair foo.h with foo.{c,cpp,cc,cxx} in the same directory.
+    const ext = path.extname(headerAbs).toLowerCase();
+    if (HEADER_EXTS.includes(ext)) {
+      const base = headerAbs.slice(0, -ext.length);
+      for (const implExt of IMPL_EXTS) {
+        const implAbs = base + implExt;
+        if (existsFile(implAbs)) {
+          const implRel = path.relative(projectRoot, implAbs).split(path.sep).join("/");
+          if (!implRel.startsWith("..")) out.push(implRel);
+        }
+      }
+    }
+  }
+
+  if (isSystemHeader && out.length === 0) return null;
+  return out.length > 0 ? out : null;
+}
+
 /* ─── Generic cross-language target resolver ──────────────────────────────── */
 
 export type CrossLangTarget =
@@ -339,8 +405,30 @@ export function resolveCrossLangTarget(
   if (skel.language === "go") {
     const files = resolveGoImport(imp.from, fromAbs, projectRoot);
     if (!files || files.length === 0) return null;
-    // Exclude self (a file in package X importing X is unusual but possible
-    // for cyclic / generated cases — don't draw a self-edge).
+    const filtered = files.filter((f) => f !== skel.file);
+    if (filtered.length === 0) return null;
+    return { kind: "file", files: filtered };
+  }
+
+  if (skel.language === "kotlin") {
+    if (imp.symbol === "*") {
+      const files = index.kotlinPackages.get(imp.from);
+      if (files && files.length > 0) {
+        const filtered = files.filter((f) => f !== skel.file);
+        if (filtered.length > 0) return { kind: "file", files: filtered };
+      }
+      return null;
+    }
+    const targetFile = index.kotlinFqcn.get(imp.from);
+    if (targetFile && targetFile !== skel.file) {
+      return { kind: "symbol", file: targetFile, symbol: imp.symbol };
+    }
+    return null;
+  }
+
+  if (skel.language === "c" || skel.language === "cpp") {
+    const files = resolveCInclude(imp.from, fromAbs, projectRoot);
+    if (!files || files.length === 0) return null;
     const filtered = files.filter((f) => f !== skel.file);
     if (filtered.length === 0) return null;
     return { kind: "file", files: filtered };
