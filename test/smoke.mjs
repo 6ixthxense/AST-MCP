@@ -249,5 +249,21 @@ check("Swift: struct Point detected", sw.symbols.some((s)=>s.name==="Point" && s
 check("Swift: protocol Reader -> interface", sw.symbols.some((s)=>s.name==="Reader" && s.kind === "interface"));
 check("Swift: imports Foundation", sw.imports?.some((i)=>i.from === "Foundation") ?? false);
 
+// ─── TSX component props ──────────────────────────────────────────────────
+const tsx = await run("Component.tsx", []);
+const tBtn = tsx.symbols.find((s) => s.name === "Button");
+const tCard = tsx.symbols.find((s) => s.name === "Card");
+const tInline = tsx.symbols.find((s) => s.name === "Inline");
+const tPlain = tsx.symbols.find((s) => s.name === "Plain");
+check("TSX: Button propsType = ButtonProps", tBtn?.propsType === "ButtonProps");
+check("TSX: Button props has label:string", tBtn?.props?.some((p) => p.name === "label" && p.type === "string") ?? false);
+check("TSX: Button props onClick type captured", tBtn?.props?.some((p) => p.name === "onClick" && /=>/.test(p.type ?? "")) ?? false);
+check("TSX: Button disabled is optional", tBtn?.props?.find((p) => p.name === "disabled")?.optional === true);
+check("TSX: Card (React.FC) propsType = CardProps", tCard?.propsType === "CardProps");
+check("TSX: Card props resolved from type alias", tCard?.props?.some((p) => p.name === "title") ?? false);
+check("TSX: Inline component inline-object props (no propsType)", !tInline?.propsType && (tInline?.props?.some((p) => p.name === "a") ?? false));
+check("TSX: Inline b is optional", tInline?.props?.find((p) => p.name === "b")?.optional === true);
+check("TSX: Plain (non-component) has no props", !tPlain?.props && !tPlain?.propsType);
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

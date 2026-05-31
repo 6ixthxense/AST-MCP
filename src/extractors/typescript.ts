@@ -1,6 +1,6 @@
 import type { TSNode } from "../parser.js";
 import { namedChildren, nameOf, headerSignature, leadingComment } from "../parser.js";
-import type { SymbolNode, ImportRef } from "../types.js";
+import type { SymbolNode, ImportRef, PropInfo } from "../types.js";
 import { makeSymbol } from "./common.js";
 
 /**
@@ -27,31 +27,34 @@ export function extractDirectivesTS(root: TSNode, _source: string): string[] {
  * Extractor shared by TypeScript, TSX and JavaScript.
  * TS-only node types (interface/type/enum) simply never appear in JS sources.
  */
+type TypeIndex = Map<string, PropInfo[]>;
+
 export function extractTypeScript(root: TSNode, _source: string): SymbolNode[] {
-  return collect(namedChildren(root), false);
+  const typeIndex = buildTypeIndex(root);
+  return collect(namedChildren(root), false, typeIndex);
 }
 
-function collect(nodes: TSNode[], exported: boolean): SymbolNode[] {
+function collect(nodes: TSNode[], exported: boolean, typeIndex: TypeIndex): SymbolNode[] {
   const out: SymbolNode[] = [];
   for (const n of nodes) {
-    const res = handle(n, exported);
+    const res = handle(n, exported, typeIndex);
     if (Array.isArray(res)) out.push(...res);
     else if (res) out.push(res);
   }
   return out;
 }
 
-function handle(node: TSNode, exported: boolean): SymbolNode | SymbolNode[] | null {
+function handle(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNode | SymbolNode[] | null {
   switch (node.type) {
     case "export_statement":
       // `export <decl>` / `export default <decl>` — mark the inner declarations exported.
-      return collect(namedChildren(node), true);
+      return collect(namedChildren(node), true, typeIndex);
 
     case "class_declaration":
     case "abstract_class_declaration": {
       const name = nameOf(node) ?? "(anonymous class)";
       const body = node.childForFieldName("body");
-      const children = body ? collect(namedChildren(body), false) : [];
+      const children = body ? collect(namedChildren(body), false, typeIndex) : [];
       return makeSymbol({
         name,
         kind: "class",
@@ -66,7 +69,7 @@ function handle(node: TSNode, exported: boolean): SymbolNode | SymbolNode[] | nu
     case "interface_declaration": {
       const name = nameOf(node) ?? "(anonymous interface)";
       const body = node.childForFieldName("body");
-      const children = body ? collect(namedChildren(body), false) : [];
+      const children = body ? collect(namedChildren(body), false, typeIndex) : [];
       return makeSymbol({
         name,
         kind: "interface",
@@ -82,7 +85,7 @@ function handle(node: TSNode, exported: boolean): SymbolNode | SymbolNode[] | nu
     case "generator_function_declaration": {
       const name = nameOf(node) ?? "(anonymous function)";
       const body = node.childForFieldName("body");
-      return makeSymbol({
+      const fnSym = makeSymbol({
         name,
         kind: "function",
         node,
@@ -91,6 +94,8 @@ function handle(node: TSNode, exported: boolean): SymbolNode | SymbolNode[] | nu
         exported,
         doc: leadingComment(node),
       });
+      attachComponentInfo(fnSym, node, null, name, typeIndex);
+      return fnSym;
     }
 
     case "type_alias_declaration":
@@ -116,7 +121,7 @@ function handle(node: TSNode, exported: boolean): SymbolNode | SymbolNode[] | nu
 
     case "lexical_declaration":
     case "variable_declaration":
-      return fromVariableDeclaration(node, exported);
+      return fromVariableDeclaration(node, exported, typeIndex);
 
     case "method_definition":
     case "method_signature":
@@ -159,7 +164,7 @@ function handle(node: TSNode, exported: boolean): SymbolNode | SymbolNode[] | nu
   }
 }
 
-function fromVariableDeclaration(node: TSNode, exported: boolean): SymbolNode[] {
+function fromVariableDeclaration(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNode[] {
   const out: SymbolNode[] = [];
   for (const decl of namedChildren(node)) {
     if (decl.type !== "variable_declarator") continue;
@@ -169,7 +174,7 @@ function fromVariableDeclaration(node: TSNode, exported: boolean): SymbolNode[] 
 
     if (value && (value.type === "arrow_function" || value.type === "function" || value.type === "function_expression")) {
       const body = value.childForFieldName("body");
-      out.push(makeSymbol({
+      const arrowSym = makeSymbol({
         name,
         kind: "function",
         node: decl,
@@ -177,11 +182,13 @@ function fromVariableDeclaration(node: TSNode, exported: boolean): SymbolNode[] 
         signature: headerSignature(value, body),
         exported,
         doc: leadingComment(node),
-      }));
+      });
+      attachComponentInfo(arrowSym, value, decl, name, typeIndex);
+      out.push(arrowSym);
     } else if (value && (value.type === "class_expression" || value.type === "class")) {
       // const MyClass = class { ... }
       const body = value.childForFieldName("body");
-      const children = body ? collect(namedChildren(body), false) : [];
+      const children = body ? collect(namedChildren(body), false, typeIndex) : [];
       out.push(makeSymbol({
         name,
         kind: "class",
@@ -318,4 +325,130 @@ function memberVisibility(node: TSNode): "public" | "private" {
   const name = node.childForFieldName("name");
   if (name && name.type === "private_property_identifier") return "private";
   return "public";
+}
+
+// ─── React/TSX component prop extraction ──────────────────────────────────────
+
+const JSX_NODES = new Set(["jsx_element", "jsx_self_closing_element", "jsx_fragment"]);
+
+function firstNamed(node: TSNode): TSNode | null {
+  return node.namedChildCount > 0 ? node.namedChild(0) : null;
+}
+
+/**
+ * Index every top-level (and exported) interface / object-type alias by name,
+ * mapping it to its prop fields. Used to resolve a component's named props type
+ * (e.g. `ButtonProps`) back to its individual props.
+ */
+function buildTypeIndex(root: TSNode): TypeIndex {
+  const idx: TypeIndex = new Map();
+  const visit = (nodes: TSNode[]): void => {
+    for (const n of nodes) {
+      if (n.type === "export_statement") { visit(namedChildren(n)); continue; }
+      if (n.type === "interface_declaration") {
+        const name = nameOf(n);
+        const body = n.childForFieldName("body");
+        if (name && body) idx.set(name, propsFromMembers(body));
+      } else if (n.type === "type_alias_declaration") {
+        const name = nameOf(n);
+        const val = n.childForFieldName("value");
+        if (name && val && val.type === "object_type") idx.set(name, propsFromMembers(val));
+      }
+    }
+  };
+  visit(namedChildren(root));
+  return idx;
+}
+
+/** Read `property_signature` members out of an interface_body / object_type. */
+function propsFromMembers(container: TSNode): PropInfo[] {
+  const props: PropInfo[] = [];
+  for (const m of namedChildren(container)) {
+    if (m.type !== "property_signature") continue;
+    const nameNode = m.childForFieldName("name");
+    if (!nameNode) continue;
+    const info: PropInfo = { name: nameNode.text };
+    const typeAnn = m.childForFieldName("type");
+    const typeNode = typeAnn ? firstNamed(typeAnn) : null;
+    if (typeNode) info.type = typeNode.text.replace(/\s+/g, " ").trim();
+    const colon = m.text.indexOf(":");
+    const head = colon >= 0 ? m.text.slice(0, colon) : m.text;
+    if (head.includes("?")) info.optional = true;
+    props.push(info);
+  }
+  return props;
+}
+
+/** Walk a function body looking for any JSX node (marks it a React component). */
+function returnsJSX(node: TSNode | null): boolean {
+  if (!node) return false;
+  let found = false;
+  const walk = (n: TSNode): void => {
+    if (found) return;
+    if (JSX_NODES.has(n.type)) { found = true; return; }
+    for (let i = 0; i < n.namedChildCount; i++) {
+      const c = n.namedChild(i);
+      if (c) walk(c);
+    }
+  };
+  walk(node);
+  return found;
+}
+
+/**
+ * If `typeNode` is `FC<P>` / `React.FC<P>` / `FunctionComponent<P>` (or the
+ * React-qualified form), return the first type argument node (the props type).
+ */
+function fcTypeArgument(typeNode: TSNode | null): TSNode | null {
+  if (!typeNode || typeNode.type !== "generic_type") return null;
+  const base = typeNode.childForFieldName("name");
+  const baseText = base ? base.text : "";
+  if (!/(^|\.)(FC|FunctionComponent)$/.test(baseText)) return null;
+  for (let i = 0; i < typeNode.namedChildCount; i++) {
+    const c = typeNode.namedChild(i);
+    if (c && c.type === "type_arguments") return firstNamed(c);
+  }
+  return null;
+}
+
+/**
+ * Detect a React component (PascalCase + returns JSX, or typed as FC) and
+ * attach its props. `funcNode` is the function/arrow; `declNode` is the
+ * variable_declarator when the component is `const X: React.FC<P> = ...`.
+ */
+function attachComponentInfo(
+  sym: SymbolNode,
+  funcNode: TSNode,
+  declNode: TSNode | null,
+  name: string,
+  idx: TypeIndex,
+): void {
+  if (!/^[A-Z]/.test(name)) return; // components are PascalCase
+
+  let propsTypeNode: TSNode | null = null;
+  let fc = false;
+  if (declNode) {
+    const ta = declNode.childForFieldName("type");
+    const arg = ta ? fcTypeArgument(firstNamed(ta)) : null;
+    if (arg) { propsTypeNode = arg; fc = true; }
+  }
+
+  if (!fc && !returnsJSX(funcNode.childForFieldName("body"))) return; // not a component
+
+  if (!propsTypeNode) {
+    const params = funcNode.childForFieldName("parameters");
+    const first = params ? firstNamed(params) : null; // required/optional_parameter
+    const ta = first ? first.childForFieldName("type") : null;
+    if (ta) propsTypeNode = firstNamed(ta);
+  }
+  if (!propsTypeNode) return; // component, but untyped props — nothing to extract
+
+  if (propsTypeNode.type === "object_type") {
+    sym.props = propsFromMembers(propsTypeNode);
+    return;
+  }
+  const typeName = propsTypeNode.text.replace(/\s+/g, " ").trim();
+  sym.propsType = typeName;
+  const resolved = idx.get(typeName);
+  if (resolved) sym.props = resolved;
 }

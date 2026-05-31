@@ -22,6 +22,15 @@ export interface Range {
   endLine: number;
 }
 
+export interface PropInfo {
+  /** Prop name. */
+  name: string;
+  /** Declared type as written in source (best-effort, whitespace-collapsed). */
+  type?: string | null;
+  /** True when the prop is optional (`foo?:`). */
+  optional?: boolean;
+}
+
 export interface SymbolNode {
   name: string;
   /** Normalized kind, shared across all languages. */
@@ -37,6 +46,10 @@ export interface SymbolNode {
   /** Leading comment or docstring (present only in detail="full"). */
   doc?: string | null;
   range: Range;
+  /** React/TSX components: the props type name when a named type is used. */
+  propsType?: string;
+  /** React/TSX components: extracted prop fields (name, type, optional). */
+  props?: PropInfo[];
   /** Nested symbols (methods inside a class, fields inside a struct, etc.). */
   children: SymbolNode[];
 }

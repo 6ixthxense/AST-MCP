@@ -4,6 +4,7 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { fileURLToPath } from "node:url";
 
 import { resolveOptions, loadProjectConfig, type SkeletonOptions } from "./config.js";
 import {
@@ -73,9 +74,19 @@ function errorText(message: string) {
   };
 }
 
+/** Read the package version at runtime so it never drifts from package.json. */
+const PKG_VERSION = (() => {
+  try {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(fs.readFileSync(path.join(dir, "..", "package.json"), "utf8")).version as string;
+  } catch {
+    return "0.0.0";
+  }
+})();
+
 const server = new McpServer({
   name: "universal-ast-mapper",
-  version: "0.5.3",
+  version: PKG_VERSION,
 });
 
 /* ----------------------- tool: list_supported_languages ----------------------- */
