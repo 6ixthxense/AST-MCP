@@ -30,6 +30,7 @@ import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
+import { computeFileComplexity } from "./complexity.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -694,6 +695,61 @@ server.registerTool(
         ...(errors.length > 0 ? { errors } : {}),
         duplicates,
       });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_complexity ──────────────────────────────── */
+server.registerTool(
+  "get_complexity",
+  {
+    title: "Get cyclomatic complexity per function",
+    description:
+      "Compute AST-based cyclomatic complexity for every function/method in a FILE or DIRECTORY. " +
+      "Each function gets a score (1 + decision points: if / for / while / case / catch / ternary / && / ||) " +
+      "and a rating (low <=5, moderate <=10, high <=20, very-high >20). For a directory, returns per-file " +
+      "results plus the highest-complexity hotspots across the scan.",
+    inputSchema: {
+      path: z.string().describe("File or directory, relative to project root or absolute within it."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      const stat = fs.statSync(abs);
+
+      if (stat.isDirectory()) {
+        const opts = resolveOptions({ detail: "outline", emitHtml: false });
+        const files = collectSourceFiles(abs, opts);
+        const results = [];
+        const errors: Array<{ file: string; error: string }> = [];
+        for (const file of files) {
+          const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+          try {
+            const fc = await computeFileComplexity(file, fileRel);
+            if (fc) results.push(fc);
+          } catch (err) {
+            errors.push({ file: fileRel, error: describeError(err) });
+          }
+        }
+        const hotspots = results
+          .flatMap((r) => r.functions.map((f) => ({ file: r.file, ...f })))
+          .sort((a, b) => b.complexity - a.complexity)
+          .slice(0, 15);
+        return jsonText({
+          directory: rel.split(path.sep).join("/"),
+          scanned: files.length,
+          ...(errors.length > 0 ? { errors } : {}),
+          hotspots,
+          files: results,
+        });
+      }
+
+      const fc = await computeFileComplexity(abs, rel.split(path.sep).join("/"));
+      if (!fc) return errorText(`Unsupported file type: ${input}`);
+      return jsonText(fc);
     } catch (err) {
       return errorText(describeError(err));
     }

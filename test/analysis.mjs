@@ -18,6 +18,7 @@ const { buildSymbolGraph } = await import("../dist/graph.js");
 const { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, findDuplicateSymbols } =
   await import("../dist/graph-analysis.js");
 const { searchSymbols } = await import("../dist/search.js");
+const { computeFileComplexity } = await import("../dist/complexity.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -212,6 +213,21 @@ console.log("\n=== Symbol Search ===");
     ["test/fixtures/dupes/a.ts", "test/fixtures/dupes/b.ts"].every((f) => validate?.locations.some((l) => l.file === f)));
   check("helper flagged as duplicate (const in 2 files)", helper?.count === 2);
   check("uniqueA is NOT a duplicate", !dups.some((d) => d.symbol === "uniqueA"));
+}
+
+// ─── Complexity ───────────────────────────────────────────────────────────────
+{
+  console.log("\n=== Cyclomatic Complexity ===");
+  const file = path.join(__dirname, "fixtures", "complexity.ts");
+  const fc = await computeFileComplexity(file, "complexity.ts");
+  const simple = fc.functions.find((f) => f.name === "simple");
+  const branchy = fc.functions.find((f) => f.name === "branchy");
+  check("simple has complexity 1", simple?.complexity === 1, `got ${simple?.complexity}`);
+  check("simple rated low", simple?.rating === "low");
+  check("branchy has complexity 6 (if + && + for + if + ternary)", branchy?.complexity === 6, `got ${branchy?.complexity}`);
+  check("branchy rated moderate", branchy?.rating === "moderate");
+  check("functions sorted desc by complexity", fc.functions[0].name === "branchy");
+  check("maxComplexity = 6", fc.maxComplexity === 6, `got ${fc.maxComplexity}`);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

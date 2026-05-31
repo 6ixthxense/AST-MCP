@@ -11,6 +11,7 @@ import { findSymbol, findRelatedSymbols, findServerImports, isApiRoute, findMiss
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
+import { computeFileComplexity } from "./complexity.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -399,6 +400,55 @@ program
         );
       }
       console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
+    }
+    console.log();
+  });
+
+// ─── Command: complexity ──────────────────────────────────────────────────────
+
+program
+  .command("complexity <path>")
+  .alias("cx")
+  .description("Cyclomatic complexity per function (file or directory)")
+  .option("--json", "Output as JSON")
+  .option("--min <n>", "Only show functions with complexity >= n", (v) => parseInt(v, 10))
+  .action(async (inputPath: string, opts: { json?: boolean; min?: number }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    const stat = fs.statSync(abs);
+    const min = opts.min ?? 1;
+
+    const fileResults = [];
+    if (stat.isDirectory()) {
+      const sopts = resolveOptions({ detail: "outline", emitHtml: false });
+      for (const file of collectSourceFiles(abs, sopts)) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fc = await computeFileComplexity(file, fileRel);
+        if (fc) fileResults.push(fc);
+      }
+    } else {
+      const fc = await computeFileComplexity(abs, rel);
+      if (!fc) die(`Unsupported file type: ${rel}`);
+      fileResults.push(fc);
+    }
+
+    const rows = fileResults
+      .flatMap((r) => r.functions.map((f) => ({ file: r.file, ...f })))
+      .filter((f) => f.complexity >= min)
+      .sort((a, b) => b.complexity - a.complexity);
+
+    if (opts.json) return jsonOut({ path: rel, functionCount: rows.length, functions: rows });
+
+    header(`Cyclomatic Complexity — ${rel}  ${dim(`(${fileResults.length} file(s))`)}`);
+    if (rows.length === 0) {
+      console.log(indent(green("✓ No functions found.")));
+    } else {
+      const colorFor = (r: string) => (r === "very-high" || r === "high" ? yellow : r === "moderate" ? bold : dim);
+      table(
+        rows.slice(0, 40).map((f) => [String(f.complexity), colorFor(f.rating)(f.rating), f.name, f.file]),
+        [["Cx", 4], ["Rating", 11], ["Function", 26], ["File", 38]],
+      );
+      const high = rows.filter((f) => f.complexity > 10).length;
+      console.log(`\n  ${rows.length} function(s)` + (high > 0 ? ` · ${yellow(`${high} above 10`)}` : ""));
     }
     console.log();
   });

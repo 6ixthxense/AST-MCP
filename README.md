@@ -94,6 +94,7 @@ ast-map validate <path>            [--max-lines N] [--max-imports N] [--max-expo
 ast-map dead     <dir>
 ast-map cycles   <dir>
 ast-map duplicates <dir>           [alias: dupes]
+ast-map complexity <path>          [alias: cx] [--min N]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -271,6 +272,23 @@ Scan a directory → find symbol names exported from **more than one file** (acc
       { "file": "src/a.ts", "kind": "function" },
       { "file": "src/b.ts", "kind": "function" }
     ]}
+  ]
+}
+```
+
+**Params:** `path`
+
+---
+
+### `get_complexity`
+Compute **AST-based cyclomatic complexity** per function/method for a file or directory. Score = `1 + decision points` (if / for / while / case / catch / ternary / `&&` / `||`), with a rating: `low` (≤5), `moderate` (≤10), `high` (≤20), `very-high` (>20). Directory scans also return the highest-complexity **hotspots** across all files.
+
+```json
+{
+  "file": "src/auth.ts",
+  "maxComplexity": 12,
+  "functions": [
+    { "name": "validate", "complexity": 12, "rating": "high", "startLine": 8, "endLine": 40 }
   ]
 }
 ```
@@ -501,6 +519,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complexity` (alias `cx`, `--min N`) CLI: per-function AST-based complexity score (`1 + if/for/while/case/catch/ternary/&&/\|\|`) with low/moderate/high/very-high ratings and directory hotspots. Server now 16 tools. |
 | **0.8.4** | **Duplicate symbol detection** — new `find_duplicate_symbols` MCP tool + `ast-map duplicates` (alias `dupes`) CLI command: finds symbol names exported from more than one file, with every file/kind that declares each name. |
 | **0.8.3** | **TSX/React component props** — component symbols now carry extracted prop fields. PascalCase functions/arrows that return JSX or are typed `React.FC<P>`/`FC<P>` get `propsType` (named props type) + `props[]` (name, type, optional), resolved from same-file `interface`/`type` declarations or inline object types. Plus: MCP server now reports its real version from `package.json` (was hardcoded `0.5.3`). |
 | **0.8.2** | **Swift cross-file wiring** — `import <Module>` resolves to that module's files (module = the `Sources/<Module>/` directory, else parent dir), wired into `build_symbol_graph` + `resolve_imports`. System modules (Foundation, UIKit, …) stay external. Completes cross-file graph/resolver support for all four v0.8.0 languages. |
