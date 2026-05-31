@@ -93,6 +93,7 @@ ast-map graph    <dir>             [-o graph.json]
 ast-map validate <path>            [--max-lines N] [--max-imports N] [--max-exports N]
 ast-map dead     <dir>
 ast-map cycles   <dir>
+ast-map duplicates <dir>           [alias: dupes]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -252,6 +253,24 @@ Each cycle is canonicalised to avoid duplicates.
 {
   "cycles": [
     { "cycle": ["src/a.ts", "src/b.ts", "src/c.ts", "src/a.ts"], "length": 3 }
+  ]
+}
+```
+
+**Params:** `path`
+
+---
+
+### `find_duplicate_symbols`
+Scan a directory → find symbol names exported from **more than one file** (accidental collisions / parallel implementations). Each result lists every file + kind that declares the name.
+
+```json
+{
+  "duplicates": [
+    { "symbol": "validate", "count": 2, "locations": [
+      { "file": "src/a.ts", "kind": "function" },
+      { "file": "src/b.ts", "kind": "function" }
+    ]}
   ]
 }
 ```
@@ -482,6 +501,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.8.4** | **Duplicate symbol detection** — new `find_duplicate_symbols` MCP tool + `ast-map duplicates` (alias `dupes`) CLI command: finds symbol names exported from more than one file, with every file/kind that declares each name. |
 | **0.8.3** | **TSX/React component props** — component symbols now carry extracted prop fields. PascalCase functions/arrows that return JSX or are typed `React.FC<P>`/`FC<P>` get `propsType` (named props type) + `props[]` (name, type, optional), resolved from same-file `interface`/`type` declarations or inline object types. Plus: MCP server now reports its real version from `package.json` (was hardcoded `0.5.3`). |
 | **0.8.2** | **Swift cross-file wiring** — `import <Module>` resolves to that module's files (module = the `Sources/<Module>/` directory, else parent dir), wired into `build_symbol_graph` + `resolve_imports`. System modules (Foundation, UIKit, …) stay external. Completes cross-file graph/resolver support for all four v0.8.0 languages. |
 | **0.8.1** | **Cross-file graph wiring for Kotlin & C/C++** — Kotlin FQCN/package index + C/C++ `#include` resolution (with header↔impl pairing) wired into `build_symbol_graph`, `resolve_imports`, and `get_call_graph`. Fixes a parse-cache rel-path leak (stale `.file` poisoned the cross-lang index → doubled paths) and Kotlin call-graph extraction (`function_declaration` name + field-less `call_expression`). |

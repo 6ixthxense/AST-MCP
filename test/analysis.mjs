@@ -15,7 +15,7 @@ process.chdir(ROOT);
 
 const { buildSkeleton, collectSourceFiles } = await import("../dist/skeleton.js");
 const { buildSymbolGraph } = await import("../dist/graph.js");
-const { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps } =
+const { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, findDuplicateSymbols } =
   await import("../dist/graph-analysis.js");
 const { searchSymbols } = await import("../dist/search.js");
 const { resolveOptions } = await import("../dist/config.js");
@@ -196,6 +196,22 @@ console.log("\n=== Symbol Search ===");
     ["doA", "doB", "doC"].every((n) => exported.some((m) => m.symbol === n)),
     `got: ${exported.map((m) => m.symbol).join(", ")}`,
   );
+}
+
+// ─── Duplicate Symbols ────────────────────────────────────────────────────────
+{
+  console.log("\n=== Duplicate Symbols ===");
+  const dir = path.join(__dirname, "fixtures", "dupes");
+  const graph = await buildGraph(dir);
+  const dups = findDuplicateSymbols(graph);
+  const validate = dups.find((d) => d.symbol === "validate");
+  const helper = dups.find((d) => d.symbol === "helper");
+  check("validate flagged as duplicate", !!validate);
+  check("validate exported from 2 files", validate?.count === 2);
+  check("validate locations include a.ts and b.ts",
+    ["test/fixtures/dupes/a.ts", "test/fixtures/dupes/b.ts"].every((f) => validate?.locations.some((l) => l.file === f)));
+  check("helper flagged as duplicate (const in 2 files)", helper?.count === 2);
+  check("uniqueA is NOT a duplicate", !dups.some((d) => d.symbol === "uniqueA"));
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

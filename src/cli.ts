@@ -10,7 +10,7 @@ import { supportedLanguages } from "./registry.js";
 import { findSymbol, findRelatedSymbols, findServerImports, isApiRoute, findMissingTryCatch, checkGeneralRules, GENERAL_RULE_DEFAULTS } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
-import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols } from "./graph-analysis.js";
+import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -399,6 +399,38 @@ program
         );
       }
       console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
+    }
+    console.log();
+  });
+
+// ─── Command: duplicates ──────────────────────────────────────────────────────
+
+program
+  .command("duplicates <dir>")
+  .alias("dupes")
+  .description("Find symbol names exported from more than one file")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const duplicates = findDuplicateSymbols(graph);
+
+    if (opts.json) return jsonOut({ directory: rel, scanned: skeletons.length, duplicateCount: duplicates.length, duplicates });
+
+    header(`Duplicate Symbols — ${rel}/  ${dim(`(${skeletons.length} files scanned)`)}`);
+    if (duplicates.length === 0) {
+      console.log(indent(green("✓ No duplicate exported symbols found.")));
+    } else {
+      for (const d of duplicates) {
+        console.log(indent(`${yellow(d.symbol)} ${dim(`— exported from ${d.count} files`)}`));
+        for (const loc of d.locations) {
+          console.log(indent(`${dim(col(loc.kind, 10))} ${loc.file}`, 5));
+        }
+      }
+      console.log(`\n  ${yellow(`${duplicates.length} duplicated name(s)`)}`);
     }
     console.log();
   });

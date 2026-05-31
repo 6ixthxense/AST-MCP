@@ -27,7 +27,7 @@ import {
 } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
-import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols } from "./graph-analysis.js";
+import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 
@@ -641,6 +641,58 @@ server.registerTool(
         cycleCount: cycles.length,
         ...(errors.length > 0 ? { errors } : {}),
         cycles,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: find_duplicate_symbols ──────────────────────── */
+server.registerTool(
+  "find_duplicate_symbols",
+  {
+    title: "Find duplicate exported symbols",
+    description:
+      "Scan a directory and return symbol names that are exported from more than one file. " +
+      "These are often accidental collisions (copy-paste, parallel implementations) that make " +
+      "a codebase harder to navigate. Each result lists every file/kind that declares the name.",
+    inputSchema: {
+      path: z
+        .string()
+        .describe("Directory to scan, relative to project root or absolute within it."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. find_duplicate_symbols requires a directory.`);
+      }
+
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skeletons: SkeletonFile[] = [];
+      const errors: Array<{ file: string; error: string }> = [];
+
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try {
+          skeletons.push(await buildSkeleton(file, fileRel, opts));
+        } catch (err) {
+          errors.push({ file: fileRel, error: describeError(err) });
+        }
+      }
+
+      const graph = buildSymbolGraph(skeletons, ROOT);
+      const duplicates = findDuplicateSymbols(graph);
+
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        duplicateCount: duplicates.length,
+        ...(errors.length > 0 ? { errors } : {}),
+        duplicates,
       });
     } catch (err) {
       return errorText(describeError(err));

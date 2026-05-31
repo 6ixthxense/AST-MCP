@@ -317,3 +317,53 @@ export function getTopSymbols(graph: SymbolGraph, limit = 10): TopSymbol[] {
 
   return results.sort((a, b) => b.importCount - a.importCount).slice(0, limit);
 }
+
+// ─── Duplicate Symbol Detection ──────────────────────────────────────────────
+
+export interface DuplicateLocation {
+  file: string;
+  kind: string;
+  nodeId: string;
+}
+
+export interface DuplicateSymbol {
+  symbol: string;
+  /** Number of distinct files that export a symbol with this name. */
+  count: number;
+  locations: DuplicateLocation[];
+}
+
+/**
+ * Find symbol names that are exported from more than one file. These are often
+ * accidental collisions (copy-paste, parallel implementations) that make a
+ * codebase harder to navigate and can cause the wrong import to be auto-suggested.
+ *
+ * Only exported symbols are considered, and a name must appear in at least two
+ * distinct files to count as a duplicate.
+ */
+export function findDuplicateSymbols(graph: SymbolGraph): DuplicateSymbol[] {
+  const byName = new Map<string, GraphSymbolNode[]>();
+  for (const node of graph.nodes) {
+    if (node.nodeType !== "symbol") continue;
+    const sym = node as GraphSymbolNode;
+    if (!sym.exported) continue;
+    const arr = byName.get(sym.symbol) ?? [];
+    arr.push(sym);
+    byName.set(sym.symbol, arr);
+  }
+
+  const out: DuplicateSymbol[] = [];
+  for (const [name, syms] of byName) {
+    // Collapse to one location per file (a file may declare the name once).
+    const perFile = new Map<string, GraphSymbolNode>();
+    for (const s of syms) if (!perFile.has(s.file)) perFile.set(s.file, s);
+    if (perFile.size < 2) continue;
+
+    const locations = [...perFile.values()]
+      .map((s) => ({ file: s.file, kind: s.kind, nodeId: s.id }))
+      .sort((a, b) => a.file.localeCompare(b.file));
+    out.push({ symbol: name, count: perFile.size, locations });
+  }
+
+  return out.sort((a, b) => b.count - a.count || a.symbol.localeCompare(b.symbol));
+}
