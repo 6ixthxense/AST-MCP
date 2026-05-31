@@ -95,6 +95,7 @@ ast-map dead     <dir>
 ast-map cycles   <dir>
 ast-map duplicates <dir>           [alias: dupes]
 ast-map complexity <path>          [alias: cx] [--min N]
+ast-map unused-params <path>       [alias: unused]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -291,6 +292,17 @@ Compute **AST-based cyclomatic complexity** per function/method for a file or di
     { "name": "validate", "complexity": 12, "rating": "high", "startLine": 8, "endLine": 40 }
   ]
 }
+```
+
+**Params:** `path`
+
+---
+
+### `find_unused_params`
+Scan a file or directory for **named functions/methods with parameters that are never used** in the body. Skips `_`-prefixed params (conventionally intentional), anonymous callbacks, and destructured bindings — and correctly treats object-shorthand (`{ id }`) as a use — to keep false positives near zero.
+
+```json
+{ "file": "src/x.ts", "functions": [ { "function": "greet", "line": 3, "unused": ["salutation"] } ] }
 ```
 
 **Params:** `path`
@@ -519,6 +531,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.8.6** | **Unused parameter detection** — new `find_unused_params` MCP tool + `ast-map unused-params` (alias `unused`) CLI: named functions whose params are never referenced. Skips `_`-prefixed/destructured/anonymous and treats object-shorthand as a use (low false-positive). Server now 17 tools. |
 | **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complexity` (alias `cx`, `--min N`) CLI: per-function AST-based complexity score (`1 + if/for/while/case/catch/ternary/&&/\|\|`) with low/moderate/high/very-high ratings and directory hotspots. Server now 16 tools. |
 | **0.8.4** | **Duplicate symbol detection** — new `find_duplicate_symbols` MCP tool + `ast-map duplicates` (alias `dupes`) CLI command: finds symbol names exported from more than one file, with every file/kind that declares each name. |
 | **0.8.3** | **TSX/React component props** — component symbols now carry extracted prop fields. PascalCase functions/arrows that return JSX or are typed `React.FC<P>`/`FC<P>` get `propsType` (named props type) + `props[]` (name, type, optional), resolved from same-file `interface`/`type` declarations or inline object types. Plus: MCP server now reports its real version from `package.json` (was hardcoded `0.5.3`). |

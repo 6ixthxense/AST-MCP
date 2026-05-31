@@ -19,6 +19,7 @@ const { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, findDup
   await import("../dist/graph-analysis.js");
 const { searchSymbols } = await import("../dist/search.js");
 const { computeFileComplexity } = await import("../dist/complexity.js");
+const { findUnusedParams } = await import("../dist/unused-params.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -228,6 +229,22 @@ console.log("\n=== Symbol Search ===");
   check("branchy rated moderate", branchy?.rating === "moderate");
   check("functions sorted desc by complexity", fc.functions[0].name === "branchy");
   check("maxComplexity = 6", fc.maxComplexity === 6, `got ${fc.maxComplexity}`);
+}
+
+// ─── Unused Parameters ────────────────────────────────────────────────────────
+{
+  console.log("\n=== Unused Parameters ===");
+  const file = path.join(__dirname, "fixtures", "unused-params.ts");
+  const res = await findUnusedParams(file, "unused-params.ts");
+  const greet = res.functions.find((f) => f.function === "greet");
+  check("greet flags salutation as unused", greet?.unused.includes("salutation") ?? false);
+  check("greet does NOT flag used params name/title",
+    !greet?.unused.includes("name") && !greet?.unused.includes("title"));
+  check("_-prefixed param not flagged (ignored)",
+    !res.functions.some((f) => f.function === "ignored"));
+  check("shorthand { id, label } counts as usage (shorthandUser clean)",
+    !res.functions.some((f) => f.function === "shorthandUser"));
+  check("only greet has unused params", res.functions.length === 1);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTop
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import { computeFileComplexity } from "./complexity.js";
+import { findUnusedParams } from "./unused-params.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -750,6 +751,59 @@ server.registerTool(
       const fc = await computeFileComplexity(abs, rel.split(path.sep).join("/"));
       if (!fc) return errorText(`Unsupported file type: ${input}`);
       return jsonText(fc);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: find_unused_params ──────────────────────────── */
+server.registerTool(
+  "find_unused_params",
+  {
+    title: "Find unused function parameters",
+    description:
+      "Scan a FILE or DIRECTORY for named functions/methods that declare parameters never " +
+      "referenced in their body. Skips `_`-prefixed params (conventionally intentional), " +
+      "anonymous callbacks, and destructured bindings to avoid false positives.",
+    inputSchema: {
+      path: z.string().describe("File or directory, relative to project root or absolute within it."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      const stat = fs.statSync(abs);
+
+      if (stat.isDirectory()) {
+        const opts = resolveOptions({ detail: "outline", emitHtml: false });
+        const files = collectSourceFiles(abs, opts);
+        const results = [];
+        const errors: Array<{ file: string; error: string }> = [];
+        for (const file of files) {
+          const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+          try {
+            const r = await findUnusedParams(file, fileRel);
+            if (r && r.functions.length > 0) results.push(r);
+          } catch (err) {
+            errors.push({ file: fileRel, error: describeError(err) });
+          }
+        }
+        const unusedParamCount = results.reduce(
+          (sum, r) => sum + r.functions.reduce((a, f) => a + f.unused.length, 0), 0,
+        );
+        return jsonText({
+          directory: rel.split(path.sep).join("/"),
+          scanned: files.length,
+          ...(errors.length > 0 ? { errors } : {}),
+          unusedParamCount,
+          files: results,
+        });
+      }
+
+      const r = await findUnusedParams(abs, rel.split(path.sep).join("/"));
+      if (!r) return errorText(`Unsupported file type: ${input}`);
+      return jsonText(r);
     } catch (err) {
       return errorText(describeError(err));
     }

@@ -12,6 +12,7 @@ import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { computeFileComplexity } from "./complexity.js";
+import { findUnusedParams } from "./unused-params.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -400,6 +401,49 @@ program
         );
       }
       console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
+    }
+    console.log();
+  });
+
+// ─── Command: unused-params ───────────────────────────────────────────────────
+
+program
+  .command("unused-params <path>")
+  .alias("unused")
+  .description("Find function parameters that are never used in the body")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    const stat = fs.statSync(abs);
+
+    const results = [];
+    if (stat.isDirectory()) {
+      const sopts = resolveOptions({ detail: "outline", emitHtml: false });
+      for (const file of collectSourceFiles(abs, sopts)) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const r = await findUnusedParams(file, fileRel);
+        if (r && r.functions.length > 0) results.push(r);
+      }
+    } else {
+      const r = await findUnusedParams(abs, rel);
+      if (!r) die(`Unsupported file type: ${rel}`);
+      if (r.functions.length > 0) results.push(r);
+    }
+
+    const rows = results.flatMap((r) => r.functions.map((f) => ({ file: r.file, ...f })));
+
+    if (opts.json) return jsonOut({ path: rel, count: rows.length, functions: rows });
+
+    header(`Unused Parameters — ${rel}`);
+    if (rows.length === 0) {
+      console.log(indent(green("✓ No unused parameters found.")));
+    } else {
+      table(
+        rows.map((f) => [f.function, yellow(f.unused.join(", ")), f.file]),
+        [["Function", 26], ["Unused params", 28], ["File", 36]],
+      );
+      const totalP = rows.reduce((a, f) => a + f.unused.length, 0);
+      console.log(`\n  ${yellow(`${totalP} unused parameter(s)`)} in ${rows.length} function(s)`);
     }
     console.log();
   });
