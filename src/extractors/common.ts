@@ -62,6 +62,7 @@ export function toOutline(symbols: SymbolNode[]): SymbolNode[] {
       children: toOutline(s.children),
     };
     if (s.exported !== undefined) out.exported = s.exported;
+    if (s.decorators) out.decorators = s.decorators;
     return out;
   });
 }

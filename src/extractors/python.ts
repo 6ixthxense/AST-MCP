@@ -19,7 +19,16 @@ function collect(nodes: TSNode[], insideClass: boolean): SymbolNode[] {
 function handle(node: TSNode, insideClass: boolean): SymbolNode | null {
   if (node.type === "decorated_definition") {
     const inner = innerDefinition(node);
-    return inner ? handle(inner, insideClass) : null;
+    if (!inner) return null;
+    const sym = handle(inner, insideClass);
+    if (sym) {
+      const decs = namedChildren(node)
+        .filter((c) => c.type === "decorator")
+        .map((d) => d.text.replace(/^@\s*/, "").replace(/\s+/g, " ").trim())
+        .filter((t) => t.length > 0);
+      if (decs.length > 0) sym.decorators = decs;
+    }
+    return sym;
   }
 
   if (node.type === "class_definition") {

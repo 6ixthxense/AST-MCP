@@ -50,6 +50,8 @@ export interface SymbolNode {
   propsType?: string;
   /** React/TSX components: extracted prop fields (name, type, optional). */
   props?: PropInfo[];
+  /** Decorators applied to this symbol, in source order, without the leading `@`. */
+  decorators?: string[];
   /** Nested symbols (methods inside a class, fields inside a struct, etc.). */
   children: SymbolNode[];
 }

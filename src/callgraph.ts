@@ -27,6 +27,8 @@ export interface CallGraphResult {
   file: string;
   function: string;
   functionRange: { startLine: number; endLine: number };
+  /** Decorators applied to the function (e.g. `router.get("/x")`), if any. */
+  decorators?: string[];
   calls: CallRef[];
   calledBy: CalledByRef[];
 }
@@ -283,6 +285,16 @@ async function fileCallsSymbol(fileAbs: string, funcName: string): Promise<boole
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/** Recursively find the first symbol with the given name and return its decorators. */
+function findDecorators(symbols: SkeletonFile["symbols"], name: string): string[] | undefined {
+  for (const s of symbols) {
+    if (s.name === name && s.decorators && s.decorators.length > 0) return s.decorators;
+    const nested = findDecorators(s.children, name);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
 export async function buildCallGraph(
   filePath: string,
   funcName: string,
@@ -462,6 +474,8 @@ export async function buildCallGraph(
     }
   }
 
+  const decorators = findDecorators(skel.symbols, funcName);
+
   return {
     file: relPath,
     function: funcName,
@@ -469,6 +483,7 @@ export async function buildCallGraph(
       startLine: funcNode.startPosition.row + 1,
       endLine: funcNode.endPosition.row + 1,
     },
+    ...(decorators ? { decorators } : {}),
     calls,
     calledBy,
   };

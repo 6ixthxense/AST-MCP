@@ -192,5 +192,21 @@ console.log("\nKotlin (constructor call across packages)");
     invCall?.calleeFileRel === "com/example/Inventory.kt");
 }
 
+// ─── Python (decorator → handler) ───────────────────────────────────────
+console.log("\nPython (decorator capture in call graph)");
+{
+  const root = path.join(fixtures, "python");
+  const cg = await buildCallGraph(path.join(root, "routes.py"), "get_item", root);
+  console.log("    get_item decorators:", JSON.stringify(cg?.decorators), "calls:", JSON.stringify(cg?.calls?.map(c => c.callee)));
+  check("Python: get_item() found", !!cg);
+  check("Python: decorator router.get captured",
+    cg?.decorators?.some(d => d.startsWith("router.get")) ?? false);
+  check("Python: body call fetch captured", cg?.calls?.some(c => c.callee === "fetch") ?? false);
+
+  const cg2 = await buildCallGraph(path.join(root, "routes.py"), "helper", root);
+  check("Python: stacked decorators captured (staticmethod + cache)",
+    (cg2?.decorators?.includes("staticmethod") && cg2?.decorators?.includes("cache")) ?? false);
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);
