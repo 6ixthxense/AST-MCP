@@ -543,10 +543,50 @@ src/
 
 ---
 
+## GitHub Action — architecture gate in CI
+
+Use AST-MCP as a CI check with the bundled composite action (`action.yml`):
+
+```yaml
+# .github/workflows/architecture.yml
+name: Architecture
+on: [pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - uses: 6ixthxense/AST-MCP@v1.0.0
+        with:
+          path: src
+          max-lines: "400"
+          max-imports: "20"
+          max-exports: "15"
+```
+
+The action runs `ast-map validate` and fails the job on threshold violations. You can also call any CLI command directly with `npx -p universal-ast-mapper ast-map <command>`.
+
+---
+
+## Stability (1.0)
+
+As of **v1.0.0**, the public surface is stable across the `1.x` line:
+
+- **MCP tool names and input schemas** — no breaking changes; new tools and new *optional* inputs may be added.
+- **CLI commands and flags** — stable; new commands/flags may be added.
+- **Skeleton JSON** — `schemaVersion` follows additive-compatible evolution; new *optional* fields (e.g. `props`, `decorators`) may appear without a major bump.
+
+Not part of the public API: the internal `src/` module layout and the generated HTML markup.
+
+---
+
 ## Changelog
 
 | Version | What changed |
 |---------|--------------|
+| **1.0.0** | **Stable release.** Locks the public API (MCP tool names + schemas, CLI surface) for the 1.x line. Adds a **GitHub Action** (`action.yml`) to run `ast-map validate` as a CI architecture gate, plus a project CI workflow. Caps a 12-language engine with 18 MCP tools / 17 CLI commands spanning skeletons, dependency graphs, and deep analysis (dead code · cycles · impact · complexity · duplicates · unused params · decorators · type flow). |
 | **0.9.0** | **Scoped type-flow tracing** — new `trace_type` MCP tool + `ast-map trace-type` (alias `flow`) CLI: follow a named type through function params, return types, typed variables, and class fields across a directory. Completes the deeper-analysis suite (dead code · cycles · impact · complexity · duplicates · unused params · type flow). **18 MCP tools**. |
 | **0.8.7** | **Python decorators in the call graph** — function/method symbols now carry a `decorators` field (`@router.get("/x")` → `router.get("/x")`), surfaced in skeletons (outline + full) and in `get_call_graph`. Traces framework wiring like FastAPI/Flask routes and `@staticmethod`/`@property` stacks to their handler. |
 | **0.8.6** | **Unused parameter detection** — new `find_unused_params` MCP tool + `ast-map unused-params` (alias `unused`) CLI: named functions whose params are never referenced. Skips `_`-prefixed/destructured/anonymous and treats object-shorthand as a use (low false-positive). Server now 17 tools. |

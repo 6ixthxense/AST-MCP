@@ -1,0 +1,37 @@
+name: "AST-MCP Validate"
+description: "Run ast-map architecture + structural validation on your codebase as a CI gate."
+author: "6ixthxense"
+branding:
+  icon: "git-branch"
+  color: "purple"
+inputs:
+  path:
+    description: "File or directory to validate."
+    required: false
+    default: "src"
+  version:
+    description: "npm version/tag of universal-ast-mapper to run."
+    required: false
+    default: "latest"
+  max-lines:
+    description: "Max lines per file before a large-file warning."
+    required: false
+    default: "400"
+  max-imports:
+    description: "Max imports per file before a too-many-imports warning."
+    required: false
+    default: "20"
+  max-exports:
+    description: "Max exports per file before a god-export warning."
+    required: false
+    default: "15"
+runs:
+  using: "composite"
+  steps:
+    - name: Run ast-map validate
+      shell: bash
+      run: >
+        npx -y -p universal-ast-mapper@${{ inputs.version }} ast-map validate "${{ inputs.path }}"
+        --max-lines ${{ inputs.max-lines }}
+        --max-imports ${{ inputs.max-imports }}
+        --max-exports ${{ inputs.max-exports }}

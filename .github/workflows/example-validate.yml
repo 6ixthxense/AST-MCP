@@ -1,0 +1,15 @@
+# Example: use the AST-MCP Validate action as an architecture gate in your own repo.
+name: Architecture
+on: [pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: 6ixthxense/AST-MCP@v1.0.0
+        with:
+          path: src
+          max-lines: "400"
