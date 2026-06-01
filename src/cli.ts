@@ -13,6 +13,7 @@ import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
+import { traceTypeInFile } from "./typeflow.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -401,6 +402,44 @@ program
         );
       }
       console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
+    }
+    console.log();
+  });
+
+// ─── Command: trace-type ──────────────────────────────────────────────────────
+
+program
+  .command("trace-type <type> [dir]")
+  .alias("flow")
+  .description("Trace a type through params, returns, variables and fields")
+  .option("--json", "Output as JSON")
+  .action(async (typeName: string, dir: string | undefined, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const sopts = resolveOptions({ detail: "outline", emitHtml: false });
+    const refs = [];
+    for (const file of collectSourceFiles(abs, sopts)) {
+      const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+      refs.push(...(await traceTypeInFile(file, fileRel, typeName)));
+    }
+
+    if (opts.json) return jsonOut({ type: typeName, dir: rel, refCount: refs.length, refs });
+
+    header(`Type Flow: ${bold(typeName)} — ${rel}/  ${dim(`(${refs.length} ref(s))`)}`);
+    if (refs.length === 0) {
+      console.log(indent(dim(`No references to type "${typeName}" found in signatures.`)));
+    } else {
+      const roleColor = (r: string) => (r === "return" ? green : r === "param" ? yellow : dim);
+      table(
+        refs.map((r) => [
+          roleColor(r.role)(r.role),
+          r.symbol + (r.detail ? `(${r.detail})` : ""),
+          `:${r.line}`,
+          r.file,
+        ]),
+        [["Role", 9], ["Symbol", 24], ["Line", 6], ["File", 34]],
+      );
     }
     console.log();
   });

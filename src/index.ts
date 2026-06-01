@@ -32,6 +32,7 @@ import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
+import { traceTypeInFile } from "./typeflow.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -804,6 +805,55 @@ server.registerTool(
       const r = await findUnusedParams(abs, rel.split(path.sep).join("/"));
       if (!r) return errorText(`Unsupported file type: ${input}`);
       return jsonText(r);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: trace_type ──────────────────────────────────── */
+server.registerTool(
+  "trace_type",
+  {
+    title: "Trace a type through the code",
+    description:
+      "Find everywhere a named type flows through a directory: function parameters and return " +
+      "types, typed variables, and class fields. A scoped, AST-based type-flow view (best for " +
+      "TS/Python) \u2014 no full type inference, so it tracks where the type is *named* in signatures.",
+    inputSchema: {
+      type: z.string().describe('Type name to trace, e.g. "Inventory".'),
+      path: z.string().describe("Directory to scan, relative to project root or absolute within it."),
+    },
+  },
+  async ({ type: typeName, path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. trace_type requires a directory.`);
+      }
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const refs = [];
+      const errors: Array<{ file: string; error: string }> = [];
+      for (const file of files) {
+        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        try {
+          refs.push(...(await traceTypeInFile(file, fileRel, typeName)));
+        } catch (err) {
+          errors.push({ file: fileRel, error: describeError(err) });
+        }
+      }
+      const byRole: Record<string, number> = { param: 0, return: 0, variable: 0, field: 0 };
+      for (const r of refs) byRole[r.role]++;
+      return jsonText({
+        type: typeName,
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        refCount: refs.length,
+        byRole,
+        ...(errors.length > 0 ? { errors } : {}),
+        refs,
+      });
     } catch (err) {
       return errorText(describeError(err));
     }

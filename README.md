@@ -96,6 +96,7 @@ ast-map cycles   <dir>
 ast-map duplicates <dir>           [alias: dupes]
 ast-map complexity <path>          [alias: cx] [--min N]
 ast-map unused-params <path>       [alias: unused]
+ast-map trace-type <type> [dir]    [alias: flow]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -306,6 +307,21 @@ Scan a file or directory for **named functions/methods with parameters that are 
 ```
 
 **Params:** `path`
+
+---
+
+### `trace_type`
+**Scoped type-flow tracing.** Find everywhere a named type flows through a directory — function **parameters** and **return types**, typed **variables**, and class **fields**. AST-based (no full type inference), so it tracks where a type is *named* in signatures; works best for TS/Python but resolves return/param types in any language that annotates them.
+
+```json
+{
+  "type": "Inventory",
+  "byRole": { "param": 3, "return": 2, "variable": 1, "field": 1 },
+  "refs": [ { "file": "src/svc.ts", "symbol": "make", "role": "return", "line": 4 } ]
+}
+```
+
+**Params:** `type`, `path`
 
 ---
 
@@ -531,6 +547,7 @@ src/
 
 | Version | What changed |
 |---------|--------------|
+| **0.9.0** | **Scoped type-flow tracing** — new `trace_type` MCP tool + `ast-map trace-type` (alias `flow`) CLI: follow a named type through function params, return types, typed variables, and class fields across a directory. Completes the deeper-analysis suite (dead code · cycles · impact · complexity · duplicates · unused params · type flow). **18 MCP tools**. |
 | **0.8.7** | **Python decorators in the call graph** — function/method symbols now carry a `decorators` field (`@router.get("/x")` → `router.get("/x")`), surfaced in skeletons (outline + full) and in `get_call_graph`. Traces framework wiring like FastAPI/Flask routes and `@staticmethod`/`@property` stacks to their handler. |
 | **0.8.6** | **Unused parameter detection** — new `find_unused_params` MCP tool + `ast-map unused-params` (alias `unused`) CLI: named functions whose params are never referenced. Skips `_`-prefixed/destructured/anonymous and treats object-shorthand as a use (low false-positive). Server now 17 tools. |
 | **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complexity` (alias `cx`, `--min N`) CLI: per-function AST-based complexity score (`1 + if/for/while/case/catch/ternary/&&/\|\|`) with low/moderate/high/very-high ratings and directory hotspots. Server now 16 tools. |

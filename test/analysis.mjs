@@ -20,6 +20,7 @@ const { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, findDup
 const { searchSymbols } = await import("../dist/search.js");
 const { computeFileComplexity } = await import("../dist/complexity.js");
 const { findUnusedParams } = await import("../dist/unused-params.js");
+const { traceTypeInFile } = await import("../dist/typeflow.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -245,6 +246,21 @@ console.log("\n=== Symbol Search ===");
   check("shorthand { id, label } counts as usage (shorthandUser clean)",
     !res.functions.some((f) => f.function === "shorthandUser"));
   check("only greet has unused params", res.functions.length === 1);
+}
+
+// ─── Type-flow tracing ────────────────────────────────────────────────────────
+{
+  console.log("\n=== Type-flow Tracing ===");
+  const file = path.join(__dirname, "fixtures", "typeflow.ts");
+  const refs = await traceTypeInFile(file, "typeflow.ts", "Inventory");
+  const has = (role, symbol) => refs.some((r) => r.role === role && r.symbol === symbol);
+  check("Inventory traced as return of make()", has("return", "make"));
+  check("Inventory traced as param of use()", refs.some((r) => r.role === "param" && r.symbol === "use" && r.detail === "inv"));
+  check("Inventory traced as typed variable store", has("variable", "store"));
+  check("Inventory traced as field item", has("field", "item"));
+  check("4 total Inventory refs", refs.length === 4, `got ${refs.length}`);
+  const numRefs = await traceTypeInFile(file, "typeflow.ts", "number");
+  check("primitive types (number) are not traced as named types", numRefs.length === 0);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
