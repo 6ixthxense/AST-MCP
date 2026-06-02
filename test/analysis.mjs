@@ -21,6 +21,7 @@ const { searchSymbols } = await import("../dist/search.js");
 const { computeFileComplexity } = await import("../dist/complexity.js");
 const { findUnusedParams } = await import("../dist/unused-params.js");
 const { traceTypeInFile } = await import("../dist/typeflow.js");
+const { discoverWorkspace, findPackageCycles } = await import("../dist/workspace.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -261,6 +262,34 @@ console.log("\n=== Symbol Search ===");
   check("4 total Inventory refs", refs.length === 4, `got ${refs.length}`);
   const numRefs = await traceTypeInFile(file, "typeflow.ts", "number");
   check("primitive types (number) are not traced as named types", numRefs.length === 0);
+}
+
+// ─── Monorepo Workspace ───────────────────────────────────────────────────────
+{
+  console.log("\n=== Monorepo Workspace ===");
+  const dir = path.join(__dirname, "fixtures", "monorepo");
+  const info = discoverWorkspace(dir);
+  const byName = Object.fromEntries(info.packages.map((p) => [p.name, p]));
+  check("workspace tool detected (npm)", info.tool === "npm");
+  check("3 packages discovered", info.packages.length === 3);
+  check("@demo/a found at packages/a", byName["@demo/a"]?.dir === "packages/a");
+  check("@demo/a depends on @demo/b (internal)", byName["@demo/a"]?.internalDeps.includes("@demo/b"));
+  check("@demo/c depends on @demo/a and @demo/b (incl devDep)",
+    ["@demo/a", "@demo/b"].every((d) => byName["@demo/c"]?.internalDeps.includes(d)));
+  check("external dep lodash not counted as internal",
+    !byName["@demo/a"]?.internalDeps.includes("lodash"));
+  check("3 internal edges", info.edges.length === 3);
+  check("fixture monorepo is acyclic", findPackageCycles(info).length === 0);
+
+  // synthetic cyclic graph: a -> b -> a
+  const cyc = findPackageCycles({
+    root: dir, tool: "npm", edges: [],
+    packages: [
+      { name: "a", dir: "a", internalDeps: ["b"], allDeps: ["b"] },
+      { name: "b", dir: "b", internalDeps: ["a"], allDeps: ["a"] },
+    ],
+  });
+  check("package cycle a<->b detected", cyc.length === 1 && cyc[0].length === 3);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

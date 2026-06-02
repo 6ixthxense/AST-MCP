@@ -1,0 +1,1 @@
+{ "name": "@demo/c", "version": "1.0.0", "dependencies": { "@demo/a": "1.0.0" }, "devDependencies": { "@demo/b": "1.0.0" } }

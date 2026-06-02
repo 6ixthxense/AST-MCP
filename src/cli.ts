@@ -14,6 +14,7 @@ import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTop
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
+import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -402,6 +403,45 @@ program
         );
       }
       console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
+    }
+    console.log();
+  });
+
+// ─── Command: workspace ───────────────────────────────────────────────────────
+
+program
+  .command("workspace [dir]")
+  .alias("ws")
+  .description("Discover monorepo packages and their internal dependency graph")
+  .option("--json", "Output as JSON")
+  .action(async (dir: string | undefined, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const info = discoverWorkspace(abs);
+    const cycles = findPackageCycles(info);
+
+    if (opts.json) {
+      return jsonOut({ root: rel, tool: info.tool, packageCount: info.packages.length, packages: info.packages, edges: info.edges, packageCycles: cycles });
+    }
+
+    header(`Workspace — ${rel}/  ${dim(`(${info.tool}, ${info.packages.length} package(s))`)}`);
+    if (info.packages.length === 0) {
+      console.log(indent(dim("No workspace packages found (no workspaces/pnpm-workspace.yaml/lerna.json).")));
+    } else {
+      table(
+        info.packages.map((p) => [
+          p.name,
+          p.dir,
+          p.internalDeps.length > 0 ? yellow(`→ ${p.internalDeps.join(", ")}`) : dim("(no internal deps)"),
+        ]),
+        [["Package", 24], ["Dir", 22], ["Internal deps", 34]],
+      );
+      if (cycles.length > 0) {
+        console.log(`\n${indent(bold(yellow("Circular package dependencies:")))}`);
+        for (const c of cycles) console.log(indent(`${yellow("↻")}  ${c.join(dim(" → "))}`));
+      }
+      console.log(`\n  ${info.edges.length} internal edge(s)` + (cycles.length ? ` · ${yellow(`${cycles.length} cycle(s)`)}` : ""));
     }
     console.log();
   });

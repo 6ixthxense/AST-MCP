@@ -33,6 +33,7 @@ import { searchSymbols } from "./search.js";
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
+import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -853,6 +854,41 @@ server.registerTool(
         byRole,
         ...(errors.length > 0 ? { errors } : {}),
         refs,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: analyze_workspace ───────────────────────────── */
+server.registerTool(
+  "analyze_workspace",
+  {
+    title: "Analyze a monorepo workspace",
+    description:
+      "Discover the packages in a JS/TS monorepo (npm/yarn `workspaces`, pnpm-workspace.yaml, or " +
+      "lerna.json) and the dependency edges between them. Returns each package's name, directory, " +
+      "and workspace-internal dependencies, plus any circular dependencies between packages.",
+    inputSchema: {
+      path: z.string().optional().describe("Workspace root directory. Defaults to the project root."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. analyze_workspace requires a directory.`);
+      }
+      const info = discoverWorkspace(abs);
+      const cycles = findPackageCycles(info);
+      return jsonText({
+        root: rel.split(path.sep).join("/") || ".",
+        tool: info.tool,
+        packageCount: info.packages.length,
+        packages: info.packages,
+        edges: info.edges,
+        packageCycles: cycles,
       });
     } catch (err) {
       return errorText(describeError(err));

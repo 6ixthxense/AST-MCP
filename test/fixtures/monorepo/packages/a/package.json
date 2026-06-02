@@ -1,0 +1,1 @@
+{ "name": "@demo/a", "version": "1.0.0", "dependencies": { "@demo/b": "1.0.0", "lodash": "^4" } }

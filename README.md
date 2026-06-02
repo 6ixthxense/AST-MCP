@@ -97,6 +97,7 @@ ast-map duplicates <dir>           [alias: dupes]
 ast-map complexity <path>          [alias: cx] [--min N]
 ast-map unused-params <path>       [alias: unused]
 ast-map trace-type <type> [dir]    [alias: flow]
+ast-map workspace [dir]            [alias: ws]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -322,6 +323,22 @@ Scan a file or directory for **named functions/methods with parameters that are 
 ```
 
 **Params:** `type`, `path`
+
+---
+
+### `analyze_workspace`
+**Monorepo support.** Discover the packages in a JS/TS monorepo (npm/yarn `workspaces`, `pnpm-workspace.yaml`, or `lerna.json`) and the dependency edges between them. Returns each package's name, directory, and workspace-internal dependencies, plus any circular dependencies between packages.
+
+```json
+{
+  "tool": "npm", "packageCount": 3,
+  "packages": [ { "name": "@demo/a", "dir": "packages/a", "internalDeps": ["@demo/b"] } ],
+  "edges": [ { "from": "@demo/a", "to": "@demo/b" } ],
+  "packageCycles": []
+}
+```
+
+**Params:** `path` (optional, defaults to root)
 
 ---
 
@@ -586,6 +603,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.1.0** | **Monorepo support** — new `analyze_workspace` MCP tool + `ast-map workspace` (alias `ws`) CLI: discovers packages from npm/yarn `workspaces`, `pnpm-workspace.yaml`, or `lerna.json`, maps internal package dependencies, and flags circular package deps. **19 MCP tools**. |
 | **1.0.0** | **Stable release.** Locks the public API (MCP tool names + schemas, CLI surface) for the 1.x line. Adds a **GitHub Action** (`action.yml`) to run `ast-map validate` as a CI architecture gate, plus a project CI workflow. Caps a 12-language engine with 18 MCP tools / 17 CLI commands spanning skeletons, dependency graphs, and deep analysis (dead code · cycles · impact · complexity · duplicates · unused params · decorators · type flow). |
 | **0.9.0** | **Scoped type-flow tracing** — new `trace_type` MCP tool + `ast-map trace-type` (alias `flow`) CLI: follow a named type through function params, return types, typed variables, and class fields across a directory. Completes the deeper-analysis suite (dead code · cycles · impact · complexity · duplicates · unused params · type flow). **18 MCP tools**. |
 | **0.8.7** | **Python decorators in the call graph** — function/method symbols now carry a `decorators` field (`@router.get("/x")` → `router.get("/x")`), surfaced in skeletons (outline + full) and in `get_call_graph`. Traces framework wiring like FastAPI/Flask routes and `@staticmethod`/`@property` stacks to their handler. |
