@@ -9,6 +9,7 @@ import {
   type CrossLangIndex,
 } from "./crosslang.js";
 import type { ImportRef, SkeletonFile } from "./types.js";
+import { resolveWorkspaceImportCached } from "./workspace.js";
 
 export interface ResolvedImport extends ImportRef {
   resolvedPath: string | null;
@@ -153,8 +154,11 @@ async function enrichRelativeImport(
   fromAbs: string,
   root: string,
 ): Promise<ResolvedImport> {
-  const isExternal = !imp.from.startsWith(".");
-  const resolvedAbs = isExternal ? null : resolveImportPath(imp.from, fromAbs);
+  const isBare = !imp.from.startsWith(".");
+  // Relative import → path resolve; bare specifier → try monorepo workspace.
+  let resolvedAbs = isBare ? null : resolveImportPath(imp.from, fromAbs);
+  if (!resolvedAbs && isBare) resolvedAbs = resolveWorkspaceImportCached(imp.from, root);
+  const treatedExternal = isBare && !resolvedAbs;
   const resolvedRel = resolvedAbs
     ? path.relative(root, resolvedAbs).split(path.sep).join("/")
     : null;
@@ -166,7 +170,7 @@ async function enrichRelativeImport(
     enrichment = { found: true };
   }
 
-  return assembleResolved(imp, resolvedAbs, resolvedRel, isExternal, enrichment);
+  return assembleResolved(imp, resolvedAbs, resolvedRel, treatedExternal, enrichment);
 }
 
 async function enrichCrossLangImport(

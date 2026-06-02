@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { SkeletonFile, SymbolNode, ImportRef } from "./types.js";
 import { resolveImportPath } from "./resolver.js";
+import { resolveWorkspaceImportCached } from "./workspace.js";
 import {
   buildCrossLangIndex,
   resolveCrossLangTarget,
@@ -92,9 +93,11 @@ function wirePathImport(
   exportedSymbolMap: Map<string, Map<string, string>>,
   edges: GraphEdge[],
 ): void {
-  if (!imp.from.startsWith(".")) return;
   if (imp.isSideEffect) return;
-  const resolvedAbs = resolveImportPath(imp.from, fromFileAbs);
+  // Relative import → path resolve; bare specifier → monorepo workspace package.
+  const resolvedAbs = imp.from.startsWith(".")
+    ? resolveImportPath(imp.from, fromFileAbs)
+    : resolveWorkspaceImportCached(imp.from, root);
   if (!resolvedAbs) return;
   const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
 

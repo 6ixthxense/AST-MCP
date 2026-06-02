@@ -149,5 +149,22 @@ console.log("\nSwift (import <Module> → module files)");
       && e.to === "Sources/Inventory/Inventory.swift"));
 }
 
+// ─── Monorepo cross-package edges ──────────────────────────────────────
+console.log("\nMonorepo (cross-package symbol-graph edges)");
+{
+  const root = path.join(fixtures, "..", "monorepo");
+  const { graph } = await buildGraph(root, [
+    "packages/a/src/index.ts",
+    "packages/b/src/index.ts",
+    "packages/b/src/helpers.ts",
+  ]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges.map(e => `${e.from} -> ${e.to}`)));
+  check("a imports @demo/b index symbol",
+    importEdges.some(e => e.from === "packages/a/src/index.ts" && e.to.startsWith("packages/b/src/index.ts")));
+  check("a imports @demo/b/helpers symbol",
+    importEdges.some(e => e.from === "packages/a/src/index.ts" && e.to.startsWith("packages/b/src/helpers.ts")));
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { buildSkeleton } from "../dist/skeleton.js";
 import { resolveOptions } from "../dist/config.js";
 import { resolveFileImports, clearCrossLangIndexCache } from "../dist/resolver.js";
+import { clearWorkspaceCache } from "../dist/workspace.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = path.join(here, "fixtures", "multi");
@@ -144,6 +145,23 @@ console.log("\nSwift");
   const fnd = refsInv.find(r => r.from === "Foundation");
   check("Swift: import Foundation flagged external",
     fnd?.importKind === "external" && fnd?.found === false);
+}
+
+// ─── Monorepo cross-package ─────────────────────────────────────────────
+console.log("\nMonorepo (cross-package import → file)");
+{
+  clearWorkspaceCache();
+  const root = path.join(fixtures, "..", "monorepo");
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const rel = "packages/a/src/index.ts";
+  const skel = await buildSkeleton(path.join(root, rel), rel, opts);
+  const refs = await resolveFileImports(skel, path.join(root, rel), root);
+  console.log("    ", JSON.stringify(refs.map(r => ({ from: r.from, to: r.resolvedRel, kind: r.importKind }))));
+  const b = refs.find(r => r.from === "@demo/b");
+  const helpers = refs.find(r => r.from === "@demo/b/helpers");
+  check("@demo/b resolves to packages/b/src/index.ts", b?.resolvedRel === "packages/b/src/index.ts");
+  check("@demo/b found + in-project (relative)", b?.found === true && b?.importKind === "relative");
+  check("subpath @demo/b/helpers → packages/b/src/helpers.ts", helpers?.resolvedRel === "packages/b/src/helpers.ts");
 }
 
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);

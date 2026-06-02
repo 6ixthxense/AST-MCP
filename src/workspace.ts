@@ -210,3 +210,120 @@ export function findPackageCycles(info: WorkspaceInfo): string[][] {
   for (const k of adj.keys()) if (color.get(k) === "white") dfs(k);
   return cycles;
 }
+
+/* ─── File-level cross-package import resolution ───────────────────────────── */
+
+const SRC_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const JS_TO_SRC: Record<string, string[]> = {
+  ".js":  [".ts", ".tsx", ".js"],
+  ".jsx": [".tsx", ".jsx"],
+  ".mjs": [".mts", ".mjs"],
+  ".cjs": [".cts", ".cjs"],
+};
+
+function existsFileSync(p: string): boolean {
+  try { return fs.statSync(p).isFile(); } catch { return false; }
+}
+
+/**
+ * Resolve a candidate path (file, extensionless, or directory) to a real source
+ * file, preferring TS sources over the declared `.js` build output.
+ */
+function resolveSourceFile(candidate: string): string | null {
+  const ext = path.extname(candidate).toLowerCase();
+  if (ext && JS_TO_SRC[ext]) {
+    const base = candidate.slice(0, candidate.length - ext.length);
+    for (const e of JS_TO_SRC[ext]) {
+      if (existsFileSync(base + e)) return base + e;
+    }
+  }
+  if (existsFileSync(candidate)) return candidate;
+  for (const e of SRC_EXTS) if (existsFileSync(candidate + e)) return candidate + e;
+  for (const e of SRC_EXTS) {
+    const idx = path.join(candidate, `index${e}`);
+    if (existsFileSync(idx)) return idx;
+  }
+  return null;
+}
+
+/** Pick the source entry file of a package, preferring real source over dist. */
+function packageEntry(pkgDir: string, pkg: any): string | null {
+  const candidates: string[] = [];
+  // explicit source-ish fields first
+  for (const f of [pkg?.source, pkg?.module, pkg?.types, pkg?.typings, pkg?.main]) {
+    if (typeof f === "string") candidates.push(f);
+  }
+  // exports["."] as a string or { source/import/default/types }
+  const dot = pkg?.exports?.["."] ?? pkg?.exports;
+  if (typeof dot === "string") candidates.push(dot);
+  else if (dot && typeof dot === "object") {
+    for (const k of ["source", "import", "default", "types"]) {
+      if (typeof dot[k] === "string") candidates.push(dot[k]);
+    }
+  }
+  // conventional source roots
+  candidates.push("src/index.ts", "src/index.tsx", "src/index.js", "index.ts", "index.tsx", "index.js");
+
+  for (const c of candidates) {
+    const resolved = resolveSourceFile(path.resolve(pkgDir, c));
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+/**
+ * Resolve a bare import specifier to an in-monorepo source file when it targets
+ * a workspace package. Handles exact package imports (`@org/utils`) and subpaths
+ * (`@org/utils/helpers`). Returns null for non-workspace (external) specifiers.
+ */
+export function resolveWorkspaceImport(
+  importFrom: string,
+  rootAbs: string,
+  info: WorkspaceInfo,
+): string | null {
+  if (importFrom.startsWith(".")) return null; // relative, not a package import
+
+  let match: WorkspacePackage | null = null;
+  let subpath = "";
+  for (const p of info.packages) {
+    if (importFrom === p.name) { match = p; subpath = ""; break; }
+    if (importFrom.startsWith(p.name + "/")) { match = p; subpath = importFrom.slice(p.name.length + 1); break; }
+  }
+  if (!match) return null;
+
+  const pkgDir = path.resolve(rootAbs, match.dir);
+  const pj = readJson(path.join(pkgDir, "package.json"));
+  const entry = packageEntry(pkgDir, pj);
+
+  if (!subpath) return entry;
+
+  // Subpath import (`@org/utils/helpers`): resolve against the source root
+  // (the entry file's directory, typically `src/`) first, then the package dir.
+  const srcRoot = entry ? path.dirname(entry) : pkgDir;
+  return (
+    resolveSourceFile(path.resolve(srcRoot, subpath)) ??
+    resolveSourceFile(path.resolve(pkgDir, subpath))
+  );
+}
+
+/* ─── Cached per-root workspace index (for resolvers) ──────────────────────── */
+
+const workspaceCache = new Map<string, WorkspaceInfo>();
+
+/** Discover (and cache) the workspace for a root, then resolve a package import. */
+export function resolveWorkspaceImportCached(importFrom: string, rootAbs: string): string | null {
+  if (importFrom.startsWith(".")) return null;
+  const key = path.resolve(rootAbs);
+  let info = workspaceCache.get(key);
+  if (!info) {
+    info = discoverWorkspace(key);
+    workspaceCache.set(key, info);
+  }
+  if (info.packages.length === 0) return null;
+  return resolveWorkspaceImport(importFrom, key, info);
+}
+
+/** Test/debug hook: drop the cached workspace index. */
+export function clearWorkspaceCache(): void {
+  workspaceCache.clear();
+}
