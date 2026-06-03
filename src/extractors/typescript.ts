@@ -227,7 +227,49 @@ export function extractImportsTS(root: TSNode, _source: string): ImportRef[] {
     // Re-exports: `export { X } from './foo'` or `export * from './foo'`
     else if (child.type === "export_statement") parseReExportStatement(child, imports);
   }
+  collectDynamicImports(root, imports);
   return imports;
+}
+
+/** First string-literal argument of a call's `arguments` node, or null. */
+function firstStringArg(args: TSNode): string | null {
+  for (let i = 0; i < args.namedChildCount; i++) {
+    const a = args.namedChild(i);
+    if (a && a.type === "string") {
+      for (let j = 0; j < a.namedChildCount; j++) {
+        const frag = a.namedChild(j);
+        if (frag && frag.type === "string_fragment") return frag.text;
+      }
+      return a.text.replace(/^['"`]|['"`]$/g, "");
+    }
+  }
+  return null;
+}
+
+/**
+ * Walk the whole tree for dynamic `import("...")` and CommonJS `require("...")`
+ * calls (they can appear anywhere, not just at the top level). Only string-literal
+ * specifiers are captured; computed requires are skipped.
+ */
+function collectDynamicImports(node: TSNode, out: ImportRef[]): void {
+  if (node.type === "call_expression") {
+    const fn = node.childForFieldName("function");
+    const args = node.childForFieldName("arguments");
+    if (fn && args) {
+      const isImport = fn.type === "import";
+      const isRequire = fn.type === "identifier" && fn.text === "require";
+      if (isImport || isRequire) {
+        const spec = firstStringArg(args);
+        if (spec !== null) {
+          out.push({ symbol: "*", from: spec, isNamespaceImport: true, isDynamic: true });
+        }
+      }
+    }
+  }
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (c) collectDynamicImports(c, out);
+  }
 }
 
 function parseReExportStatement(node: TSNode, out: ImportRef[]): void {

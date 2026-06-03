@@ -309,6 +309,24 @@ console.log("\n=== Symbol Search ===");
   check("undecorated method has no decorators", !plain?.decorators);
 }
 
+// ─── Dynamic Imports ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Dynamic Imports ===");
+  const { resolveOptions: ro2 } = await import("../dist/config.js");
+  const { buildSkeleton: bs2 } = await import("../dist/skeleton.js");
+  const file = path.join(__dirname, "fixtures", "dynamic-imports.ts");
+  const skel = await bs2(file, "dynamic-imports.ts", ro2({ detail: "full", emitHtml: false }));
+  const dyn = (skel.imports ?? []).filter((i) => i.isDynamic);
+  const froms = dyn.map((i) => i.from).sort();
+  check("static import is not flagged dynamic",
+    (skel.imports ?? []).some((i) => i.from === "./static" && !i.isDynamic));
+  check("import('./dynamic') captured as dynamic", froms.includes("./dynamic"));
+  check("nested import('./lazy-route') captured", froms.includes("./lazy-route"));
+  check("require('./common') captured as dynamic", froms.includes("./common"));
+  check("require('lodash') captured as dynamic", froms.includes("lodash"));
+  check("4 dynamic imports total", dyn.length === 4, `got ${dyn.length}`);
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

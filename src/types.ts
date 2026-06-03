@@ -71,6 +71,8 @@ export interface ImportRef {
   isDefault?: boolean;
   /** True for `import "module"` (no bindings). */
   isSideEffect?: boolean;
+  /** True for dynamic `import("...")` or CommonJS `require("...")`. */
+  isDynamic?: boolean;
 }
 
 export interface SkeletonFile {
