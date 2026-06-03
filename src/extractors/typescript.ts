@@ -55,7 +55,7 @@ function handle(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNo
       const name = nameOf(node) ?? "(anonymous class)";
       const body = node.childForFieldName("body");
       const children = body ? collect(namedChildren(body), false, typeIndex) : [];
-      return makeSymbol({
+      const clsSym = makeSymbol({
         name,
         kind: "class",
         node,
@@ -64,6 +64,8 @@ function handle(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNo
         doc: leadingComment(node),
         children,
       });
+      attachDecorators(clsSym, node);
+      return clsSym;
     }
 
     case "interface_declaration": {
@@ -128,7 +130,7 @@ function handle(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNo
     case "abstract_method_signature": {
       const name = nameOf(node) ?? "(method)";
       const body = node.childForFieldName("body");
-      return makeSymbol({
+      const mSym = makeSymbol({
         name,
         kind: "method",
         node,
@@ -137,6 +139,8 @@ function handle(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNo
         visibility: memberVisibility(node),
         doc: leadingComment(node),
       });
+      attachDecorators(mSym, node);
+      return mSym;
     }
 
     case "public_field_definition":
@@ -451,4 +455,35 @@ function attachComponentInfo(
   sym.propsType = typeName;
   const resolved = idx.get(typeName);
   if (resolved) sym.props = resolved;
+}
+
+// ─── TS/JS decorators ─────────────────────────────────────────────────────────
+
+/** Strip the leading `@` and collapse whitespace from a decorator node. */
+function decoratorText(node: TSNode): string {
+  return node.text.replace(/^@\s*/, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Attach decorators to a class/method symbol. TS decorators appear either as
+ * preceding sibling `decorator` nodes (classes, methods) or as leading child
+ * decorators (some grammars) — collect both.
+ */
+function attachDecorators(sym: SymbolNode, node: TSNode): void {
+  const decs: string[] = [];
+  // leading child decorators
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (c && c.type === "decorator") decs.push(decoratorText(c));
+    else if (c && c.type !== "decorator") break;
+  }
+  // preceding sibling decorators (most common for classes/methods)
+  let prev = node.previousNamedSibling;
+  const lead: string[] = [];
+  while (prev && prev.type === "decorator") {
+    lead.unshift(decoratorText(prev));
+    prev = prev.previousNamedSibling;
+  }
+  const all = [...lead, ...decs].filter((t) => t.length > 0);
+  if (all.length > 0) sym.decorators = all;
 }

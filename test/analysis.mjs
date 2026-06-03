@@ -292,6 +292,23 @@ console.log("\n=== Symbol Search ===");
   check("package cycle a<->b detected", cyc.length === 1 && cyc[0].length === 3);
 }
 
+// ─── TS Decorators ────────────────────────────────────────────────────────────
+{
+  console.log("\n=== TS/JS Decorators ===");
+  const { resolveOptions: ro } = await import("../dist/config.js");
+  const { buildSkeleton: bs } = await import("../dist/skeleton.js");
+  const file = path.join(__dirname, "fixtures", "ts-decorators.ts");
+  const skel = await bs(file, "ts-decorators.ts", ro({ detail: "full", emitHtml: false }));
+  const flat = [];
+  (function walk(syms){ for (const s of syms){ flat.push(s); walk(s.children); } })(skel.symbols);
+  const cls = flat.find((s) => s.name === "AppComponent");
+  const m = flat.find((s) => s.name === "getItem");
+  const plain = flat.find((s) => s.name === "fetch");
+  check("class decorator @Component captured", cls?.decorators?.some((d) => d.startsWith("Component(")) ?? false);
+  check("method decorator @Get captured", m?.decorators?.some((d) => d.startsWith("Get(")) ?? false);
+  check("undecorated method has no decorators", !plain?.decorators);
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

@@ -605,6 +605,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.3.0** | **TS/JS decorators** — class and method symbols now carry a `decorators` field (`@Component({...})`, `@Injectable()`, `@Get("/x")`), in skeletons and `get_call_graph`. Extends the Python decorator support (v0.8.7) to TypeScript/JavaScript — traces Angular/NestJS-style framework wiring to its class/handler. |
 | **1.2.0** | **File-level cross-package resolution** — in a monorepo, bare imports of a workspace package (`@org/utils`, `@org/utils/sub`) now resolve to the actual source file (preferring `src/` over built `dist/`), so `resolve_imports` marks them in-project and `build_symbol_graph` draws cross-package edges. Builds on the v1.1.0 workspace discovery. |
 | **1.1.0** | **Monorepo support** — new `analyze_workspace` MCP tool + `ast-map workspace` (alias `ws`) CLI: discovers packages from npm/yarn `workspaces`, `pnpm-workspace.yaml`, or `lerna.json`, maps internal package dependencies, and flags circular package deps. **19 MCP tools**. |
 | **1.0.0** | **Stable release.** Locks the public API (MCP tool names + schemas, CLI surface) for the 1.x line. Adds a **GitHub Action** (`action.yml`) to run `ast-map validate` as a CI architecture gate, plus a project CI workflow. Caps a 12-language engine with 18 MCP tools / 17 CLI commands spanning skeletons, dependency graphs, and deep analysis (dead code · cycles · impact · complexity · duplicates · unused params · decorators · type flow). |
