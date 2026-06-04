@@ -327,6 +327,26 @@ console.log("\n=== Symbol Search ===");
   check("4 dynamic imports total", dyn.length === 4, `got ${dyn.length}`);
 }
 
+// ─── Ambient .d.ts declarations ───────────────────────────────────────────────
+{
+  console.log("\n=== Ambient .d.ts ===");
+  const { resolveOptions: ro3 } = await import("../dist/config.js");
+  const { buildSkeleton: bs3 } = await import("../dist/skeleton.js");
+  const file = path.join(__dirname, "fixtures", "ambient.d.ts");
+  const skel = await bs3(file, "ambient.d.ts", ro3({ detail: "full", emitHtml: false }));
+  const flat = [];
+  (function walk(syms){ for (const s of syms){ flat.push(s); walk(s.children); } })(skel.symbols);
+  const find = (k, n) => flat.find((s) => s.kind === k && s.name === n);
+  check("declare module surfaced as namespace", !!find("namespace", "my-lib"));
+  check("nested declared function (doThing) surfaced", !!find("function", "doThing"));
+  check("declare function globalHelper surfaced", !!find("function", "globalHelper"));
+  check("declare const CONFIG surfaced (no initializer)", !!find("const", "CONFIG"));
+  check("declare namespace MyNS surfaced", !!find("namespace", "MyNS"));
+  check("export declare class Service surfaced", !!find("class", "Service"));
+  check("Service.run method surfaced", !!find("method", "run"));
+  check("non-empty .d.ts no longer yields 0 symbols", skel.symbolCount >= 8, `got ${skel.symbolCount}`);
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

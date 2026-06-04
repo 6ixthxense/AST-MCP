@@ -163,6 +163,41 @@ function handle(node: TSNode, exported: boolean, typeIndex: TypeIndex): SymbolNo
       return null;
     }
 
+    case "ambient_declaration":
+      // `.d.ts` / `declare ...` — surface the declared API as exported.
+      return collect(namedChildren(node), true, typeIndex);
+
+    case "function_signature": {
+      const name = nameOf(node) ?? "(function)";
+      return makeSymbol({
+        name,
+        kind: "function",
+        node,
+        rawKind: node.type,
+        signature: node.text.replace(/\s+/g, " ").replace(/;\s*$/, "").trim(),
+        exported,
+        doc: leadingComment(node),
+      });
+    }
+
+    case "module":            // declare module "name" { ... }
+    case "internal_module": { // namespace Name { ... }
+      const nameNode = node.childForFieldName("name");
+      const rawName = nameNode ? nameNode.text : "(namespace)";
+      const name = rawName.replace(/^['"`]|['"`]$/g, "");
+      const body = node.childForFieldName("body");
+      const children = body ? collect(namedChildren(body), false, typeIndex) : [];
+      return makeSymbol({
+        name,
+        kind: "namespace",
+        node,
+        rawKind: node.type,
+        exported,
+        doc: leadingComment(node),
+        children,
+      });
+    }
+
     default:
       return null;
   }
@@ -209,6 +244,17 @@ function fromVariableDeclaration(node: TSNode, exported: boolean, typeIndex: Typ
         kind: "const",
         node: decl,
         rawKind: `${node.type}>const`,
+        signature: decl.text.replace(/\s+/g, " ").trim().slice(0, 120),
+        exported: true,
+        doc: leadingComment(node),
+      }));
+    } else if (exported && !value && decl.childForFieldName("type")) {
+      // Ambient `declare const X: T` — no initializer, but part of the typed API.
+      out.push(makeSymbol({
+        name,
+        kind: "const",
+        node: decl,
+        rawKind: `${node.type}>declare`,
         signature: decl.text.replace(/\s+/g, " ").trim().slice(0, 120),
         exported: true,
         doc: leadingComment(node),

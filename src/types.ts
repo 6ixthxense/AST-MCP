@@ -13,7 +13,8 @@ export type SymbolKind =
   | "enum"
   | "const"
   | "var"
-  | "field";
+  | "field"
+  | "namespace";
 
 export interface Range {
   /** 1-based line number where the symbol starts. */

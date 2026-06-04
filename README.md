@@ -605,6 +605,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.5.0** | **`.d.ts` / ambient declarations** — `declare function/const/class`, `declare module "x"`, and `declare namespace` (and plain `namespace`) are now extracted (previously a `.d.ts` yielded 0 symbols). Adds a `namespace` symbol kind; declared APIs surface as exported, nested under their module/namespace. |
 | **1.4.0** | **Dynamic import tracking** — dynamic `import("...")` and CommonJS `require("...")` calls (anywhere in a file) are now captured as imports with an `isDynamic` flag. Relative dynamic imports resolve and draw graph edges like static ones, so lazy-loaded routes/modules show up in the dependency graph. |
 | **1.3.0** | **TS/JS decorators** — class and method symbols now carry a `decorators` field (`@Component({...})`, `@Injectable()`, `@Get("/x")`), in skeletons and `get_call_graph`. Extends the Python decorator support (v0.8.7) to TypeScript/JavaScript — traces Angular/NestJS-style framework wiring to its class/handler. |
 | **1.2.0** | **File-level cross-package resolution** — in a monorepo, bare imports of a workspace package (`@org/utils`, `@org/utils/sub`) now resolve to the actual source file (preferring `src/` over built `dist/`), so `resolve_imports` marks them in-project and `build_symbol_graph` draws cross-package edges. Builds on the v1.1.0 workspace discovery. |

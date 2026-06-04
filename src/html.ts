@@ -11,6 +11,7 @@ const KIND_COLORS: Record<SymbolKind, string> = {
   const: "#65a30d",
   var: "#ca8a04",
   field: "#64748b",
+  namespace: "#9333ea",
 };
 
 function esc(s: string): string {
