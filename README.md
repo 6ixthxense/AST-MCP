@@ -562,6 +562,18 @@ src/
 
 ---
 
+## MCP resources
+
+Beyond tools, the server exposes the codebase as **browseable MCP resources**, so an agent (or MCP client UI) can list and read structure directly:
+
+| URI | What |
+|-----|------|
+| `ast://languages` | supported languages + extensions |
+| `ast://skeleton/{path}` | the skeleton for one source file (templated; `resources/list` enumerates every file) |
+| `ast://graph` | the whole-root symbol dependency graph (guarded by file count) |
+
+---
+
 ## GitHub Action — architecture gate in CI
 
 Use AST-MCP as a CI check with the bundled composite action (`action.yml`):
@@ -605,6 +617,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.6.0** | **MCP resource endpoints** — the server now exposes browseable resources: `ast://languages`, `ast://skeleton/{path}` (templated, one per source file via `resources/list`), and `ast://graph`. Agents can list and read codebase structure as resources, not just call tools. |
 | **1.5.0** | **`.d.ts` / ambient declarations** — `declare function/const/class`, `declare module "x"`, and `declare namespace` (and plain `namespace`) are now extracted (previously a `.d.ts` yielded 0 symbols). Adds a `namespace` symbol kind; declared APIs surface as exported, nested under their module/namespace. |
 | **1.4.0** | **Dynamic import tracking** — dynamic `import("...")` and CommonJS `require("...")` calls (anywhere in a file) are now captured as imports with an `isDynamic` flag. Relative dynamic imports resolve and draw graph edges like static ones, so lazy-loaded routes/modules show up in the dependency graph. |
 | **1.3.0** | **TS/JS decorators** — class and method symbols now carry a `decorators` field (`@Component({...})`, `@Injectable()`, `@Get("/x")`), in skeletons and `get_call_graph`. Extends the Python decorator support (v0.8.7) to TypeScript/JavaScript — traces Angular/NestJS-style framework wiring to its class/handler. |

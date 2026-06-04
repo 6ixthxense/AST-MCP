@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
@@ -1168,6 +1168,87 @@ function describeError(err: unknown): string {
   }
   return err instanceof Error ? err.message : String(err);
 }
+
+/* ─────────────────── MCP resources (browseable structure) ──────────────── */
+
+server.registerResource(
+  "languages",
+  "ast://languages",
+  {
+    title: "Supported languages",
+    description: "Languages and file extensions this server can map.",
+    mimeType: "application/json",
+  },
+  async (uri) => ({
+    contents: [{
+      uri: uri.href,
+      mimeType: "application/json",
+      text: JSON.stringify({ root: ROOT, languages: supportedLanguages() }, null, 2),
+    }],
+  }),
+);
+
+server.registerResource(
+  "skeleton",
+  new ResourceTemplate("ast://skeleton/{+path}", {
+    list: async () => {
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(ROOT, opts);
+      return {
+        resources: files.map((f) => {
+          const rel = path.relative(ROOT, f).split(path.sep).join("/");
+          return { uri: `ast://skeleton/${rel}`, name: rel, mimeType: "application/json" };
+        }),
+      };
+    },
+  }),
+  {
+    title: "File skeleton",
+    description: "Normalized code skeleton (symbols, imports, ranges) for one source file.",
+    mimeType: "application/json",
+  },
+  async (uri, variables) => {
+    const rel = decodeURIComponent(String(variables.path)).split(path.sep).join("/");
+    const { abs, rel: safeRel } = resolveInRoot(rel);
+    const opts = resolveOptions({ detail: "outline", emitHtml: false });
+    const skel = await buildSkeleton(abs, safeRel.split(path.sep).join("/"), opts);
+    return {
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(skel, null, 2) }],
+    };
+  },
+);
+
+server.registerResource(
+  "graph",
+  "ast://graph",
+  {
+    title: "Symbol dependency graph",
+    description: "Symbol-level dependency graph for the whole root (guarded by node count).",
+    mimeType: "application/json",
+  },
+  async (uri) => {
+    const opts = resolveOptions({ detail: "outline", emitHtml: false });
+    const files = collectSourceFiles(ROOT, opts);
+    if (files.length > 1500) {
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify({ note: `Too large to inline (${files.length} files). Use build_symbol_graph on a subdirectory.`, files: files.length }, null, 2),
+        }],
+      };
+    }
+    const skels: SkeletonFile[] = [];
+    for (const file of files) {
+      const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+      try { skels.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
+    }
+    const graph = buildSymbolGraph(skels, ROOT);
+    return {
+      contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(graph, null, 2) }],
+    };
+  },
+);
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

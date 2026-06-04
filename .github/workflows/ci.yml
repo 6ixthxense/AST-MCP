@@ -15,3 +15,4 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: node test/graph-smoke.mjs && node test/resolver-smoke.mjs && node test/callgraph-smoke.mjs
+      - run: node test/resources-smoke.mjs
