@@ -22,6 +22,7 @@ const { computeFileComplexity } = await import("../dist/complexity.js");
 const { findUnusedParams } = await import("../dist/unused-params.js");
 const { traceTypeInFile } = await import("../dist/typeflow.js");
 const { discoverWorkspace, findPackageCycles } = await import("../dist/workspace.js");
+const { buildExplorerHtml } = await import("../dist/explorer.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -345,6 +346,21 @@ console.log("\n=== Symbol Search ===");
   check("export declare class Service surfaced", !!find("class", "Service"));
   check("Service.run method surfaced", !!find("method", "run"));
   check("non-empty .d.ts no longer yields 0 symbols", skel.symbolCount >= 8, `got ${skel.symbolCount}`);
+}
+
+// ─── Graph Explorer (Web UI) ──────────────────────────────────────────────────
+{
+  console.log("\n=== Graph Explorer ===");
+  const graph = await buildGraph(GRAPH_DIR);
+  const html = buildExplorerHtml(graph, GRAPH_DIR);
+  check("explorer html is non-trivial", html.length > 1000);
+  check("self-contained (no external script src)", !/src=["']https?:/.test(html));
+  check("has a canvas element", html.includes("<canvas"));
+  const m = html.match(/var DATA=(\{[\s\S]*?\});<\/script>/);
+  check("embeds graph DATA", !!m);
+  const data = m ? JSON.parse(m[1]) : { nodes: [], links: [] };
+  check("explorer nodes match graph files", data.nodes.length === graph.stats.fileCount);
+  check("explorer has dependency links", data.links.length > 0);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

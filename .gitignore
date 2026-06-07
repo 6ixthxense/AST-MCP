@@ -6,3 +6,5 @@ test/out/
 .DS_Store
 .claude/settings.local.json
 .mcp.json
+ast-explorer.html
+ast-map-explorer.html

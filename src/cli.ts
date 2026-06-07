@@ -15,6 +15,7 @@ import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
+import { buildExplorerHtml } from "./explorer.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -404,6 +405,32 @@ program
       }
       console.log(`\n  ${yellow(`${highConf.length} high`)} · ${dim(`${lowConf.length} low`)} confidence dead export(s)`);
     }
+    console.log();
+  });
+
+// ─── Command: explore ─────────────────────────────────────────────────────────
+
+program
+  .command("explore [dir]")
+  .description("Generate an interactive HTML dependency-graph explorer")
+  .option("-o, --out <file>", "Output HTML path")
+  .action(async (dir: string | undefined, opts: { out?: string }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const html = buildExplorerHtml(graph, abs);
+
+    const outPath = opts.out
+      ? path.resolve(process.cwd(), opts.out)
+      : path.join(abs, "ast-explorer.html");
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, html, "utf8");
+
+    header(`Graph Explorer — ${rel}/  ${dim(`(${skeletons.length} files)`)}`);
+    console.log(indent(green("✓ wrote " + path.relative(process.cwd(), outPath))));
+    console.log(indent(dim("open it in a browser — drag nodes, scroll to zoom, click to highlight, filter by name")));
     console.log();
   });
 
