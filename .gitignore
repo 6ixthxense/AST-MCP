@@ -8,3 +8,4 @@ test/out/
 .mcp.json
 ast-explorer.html
 ast-map-explorer.html
+ast-explorer-src.html

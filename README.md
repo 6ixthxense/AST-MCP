@@ -618,6 +618,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.7.3** | **Explorer layout overhaul** — only connected files are force-laid (centered + filling the viewport); orphan files with no in-scope deps are parked in a tidy grid below instead of sprawling. Verified centered at any window size. |
 | **1.7.2** | **Explorer fit, really this time** — continuous auto-fit until you interact, robust canvas sizing, and centered node init, so the graph fills the viewport instead of bunching in a corner. |
 | **1.7.1** | **Explorer fit fix** — the `ast-map explore` graph now auto-fits the viewport (spreads to fill the screen instead of clustering in the centre); double-click re-fits. |
 | **1.7.0** | **Web UI graph explorer** — `ast-map explore [dir]` writes a self-contained, dependency-free interactive HTML: a force-directed file dependency graph (drag, zoom, click-to-highlight neighbours, filter by name). No build step, no external scripts — just open it in a browser. |
