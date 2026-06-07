@@ -66,9 +66,9 @@ const CLIENT =
   "var adj={};links.forEach(function(l){(adj[l.source]=adj[l.source]||[]).push(l.target);(adj[l.target]=adj[l.target]||[]).push(l.source);});" +
   "var view={x:0,y:0,k:1},sel=null,hover=null,drag=null,pan=null,q='',autofit=true;" +
   "function radius(n){return 4+Math.sqrt(n.symbols||0)*1.7;}" +
-  "function tick(){if(!sim.length)return;var k=0.0016;for(var i=0;i<sim.length;i++){var a=sim[i];a.vx+=(W/2-a.x)*k;a.vy+=(H/2-a.y)*k;for(var j=i+1;j<sim.length;j++){var b=sim[j];var dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy+0.01,d=Math.sqrt(d2),f=2200/d2,fx=f*dx/d,fy=f*dy/d;a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;}}" +
+  "function tick(){if(!sim.length)return;var k=0.0016;for(var i=0;i<sim.length;i++){var a=sim[i];a.vx+=(W/2-a.x)*k;a.vy+=(H/2-a.y)*k;for(var j=i+1;j<sim.length;j++){var b=sim[j];var dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy;if(d2<100)d2=100;var d=Math.sqrt(d2),f=2200/d2,fx=f*dx/d,fy=f*dy/d;a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;}}" +
   "links.forEach(function(l){var a=byId[l.source],b=byId[l.target];if(!a||!b)return;var dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)+0.01,f=(d-90)*0.02,fx=f*dx/d,fy=f*dy/d;a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy;});" +
-  "for(var i=0;i<sim.length;i++){var n=sim[i];if(n===drag)continue;n.vx*=0.85;n.vy*=0.85;n.x+=n.vx;n.y+=n.vy;}}" +
+  "for(var i=0;i<sim.length;i++){var n=sim[i];if(n===drag)continue;n.vx*=0.85;n.vy*=0.85;if(n.vx>30)n.vx=30;if(n.vx<-30)n.vx=-30;if(n.vy>30)n.vy=30;if(n.vy<-30)n.vy=-30;n.x+=n.vx;n.y+=n.vy;}}" +
   "function bb4(arr){var a=1e9,b=1e9,c2=-1e9,d2=-1e9;for(var i=0;i<arr.length;i++){var n=arr[i];if(n.x<a)a=n.x;if(n.y<b)b=n.y;if(n.x>c2)c2=n.x;if(n.y>d2)d2=n.y;}return[a,b,c2,d2];}" +
   "function layoutOrphans(){if(!orphans.length)return;var bb=sim.length?bb4(sim):[W*0.3,H*0.3,W*0.7,H*0.5];var left=bb[0],bottom=bb[3]+46,wide=Math.max(bb[2]-bb[0],260);var cols=Math.max(1,Math.ceil(Math.sqrt(orphans.length*1.8)));var gap=Math.max(22,wide/cols);for(var i=0;i<orphans.length;i++){orphans[i].x=left+(i%cols)*gap;orphans[i].y=bottom+Math.floor(i/cols)*22;}}" +
   "function fitView(){var bb=bb4(nodes);var aw=availW();var bw=Math.max(bb[2]-bb[0],1),bh=Math.max(bb[3]-bb[1],1),k=Math.min(aw/(bw+70),H/(bh+70));k=Math.max(0.12,Math.min(k,2.2));view.k=k;view.x=aw/2-((bb[0]+bb[2])/2)*k;view.y=H/2-((bb[1]+bb[3])/2)*k;}" +
