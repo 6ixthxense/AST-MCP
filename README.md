@@ -618,6 +618,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.8.1** | **Explorer self-heal sizing** — the explorer now re-checks canvas size every frame and re-fits, so it always centers/fills even if the canvas reports zero size at load (and survives container resizes). |
 | **1.8.0** | **Explorer detail sidebar** — click a file in `ast-map explore` to open a side panel: language, symbol count, its symbols, the files it imports, and the files that import it — each clickable to jump to that file. |
 | **1.7.3** | **Explorer layout overhaul** — only connected files are force-laid (centered + filling the viewport); orphan files with no in-scope deps are parked in a tidy grid below instead of sprawling. Verified centered at any window size. |
 | **1.7.2** | **Explorer fit, really this time** — continuous auto-fit until you interact, robust canvas sizing, and centered node init, so the graph fills the viewport instead of bunching in a corner. |
