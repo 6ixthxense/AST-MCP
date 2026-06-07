@@ -618,6 +618,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.7.1** | **Explorer fit fix** — the `ast-map explore` graph now auto-fits the viewport (spreads to fill the screen instead of clustering in the centre); double-click re-fits. |
 | **1.7.0** | **Web UI graph explorer** — `ast-map explore [dir]` writes a self-contained, dependency-free interactive HTML: a force-directed file dependency graph (drag, zoom, click-to-highlight neighbours, filter by name). No build step, no external scripts — just open it in a browser. |
 | **1.6.0** | **MCP resource endpoints** — the server now exposes browseable resources: `ast://languages`, `ast://skeleton/{path}` (templated, one per source file via `resources/list`), and `ast://graph`. Agents can list and read codebase structure as resources, not just call tools. |
 | **1.5.0** | **`.d.ts` / ambient declarations** — `declare function/const/class`, `declare module "x"`, and `declare namespace` (and plain `namespace`) are now extracted (previously a `.d.ts` yielded 0 symbols). Adds a `namespace` symbol kind; declared APIs surface as exported, nested under their module/namespace. |
