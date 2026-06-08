@@ -36,6 +36,7 @@ import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport } from "./report.js";
+import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -944,6 +945,57 @@ server.registerTool(
       }
       const data = await buildReport(abs, ROOT);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_diff ────────────────────────────────────── */
+server.registerTool(
+  "get_diff",
+  {
+    title: "Git-aware change diff + blast radius",
+    description:
+      "Compare the working tree against a git ref (default HEAD) and return which symbols were " +
+      "added/removed/modified per file, which changes are potentially **breaking** (removed or " +
+      "signature-changed exports), and the **blast radius** \u2014 files that depend on those breaking changes.",
+    inputSchema: {
+      base: z.string().optional().describe("Git ref to compare against. Default HEAD."),
+      path: z.string().optional().describe("Limit to a subdirectory. Default project root."),
+    },
+  },
+  async ({ base, path: input }) => {
+    try {
+      if (!isGitRepo(ROOT)) return errorText("Not a git repository (or git is unavailable).");
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      const data = await computeDiff(abs, ROOT, base ?? "HEAD");
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_risk_map ────────────────────────────────── */
+server.registerTool(
+  "get_risk_map",
+  {
+    title: "Refactor risk map (churn \u00d7 complexity)",
+    description:
+      "Rank files by refactor risk = git churn (number of commits touching the file) \u00d7 the file's " +
+      "max function complexity. Surfaces the files that are both frequently changed and complex \u2014 " +
+      "the most valuable refactor / test targets.",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to scan. Default project root."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      if (!isGitRepo(ROOT)) return errorText("Not a git repository (or git is unavailable).");
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      const files = await computeRisk(abs, ROOT);
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: files.length, files: files.slice(0, 50) });
     } catch (err) {
       return errorText(describeError(err));
     }

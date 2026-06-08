@@ -18,6 +18,7 @@ import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { buildExplorerHtml } from "./explorer.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport, buildReportHtml } from "./report.js";
+import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -474,6 +475,57 @@ program
     header(`Source Map — ${rel}  ${dim("(" + info.mapKind + ")")}`);
     for (const sourceFile of info.sources) console.log(indent(green("←") + " " + sourceFile));
     console.log(`\n  ${info.sources.length} original source(s)` + (info.hasContent ? dim(" · embeds sourcesContent") : ""));
+    console.log();
+  });
+
+// ─── Command: diff ────────────────────────────────────────────────────────────
+
+program
+  .command("diff [base]")
+  .description("Symbols changed since a git ref + breaking changes + blast radius")
+  .option("--dir <dir>", "Limit to a subdirectory", ".")
+  .option("--json", "Output as JSON")
+  .action(async (base: string | undefined, opts: { dir: string; json?: boolean }) => {
+    if (!isGitRepo(ROOT)) die("not a git repository (or git is unavailable)");
+    const { abs, rel } = resolveArg(opts.dir);
+    const ref = base ?? "HEAD";
+    const d = await computeDiff(abs, ROOT, ref);
+    if (opts.json) return jsonOut(d);
+    header(`Diff since ${bold(ref)}  ${dim(`(${d.summary.filesChanged} file(s) · +${d.summary.added} ~${d.summary.modified} -${d.summary.removed})`)}`);
+    if (d.files.length === 0) { console.log(indent(dim("No source-symbol changes."))); console.log(); return; }
+    for (const f of d.files) {
+      console.log(indent(`${bold(f.file)} ${dim("[" + f.status + "]")}`));
+      for (const a of f.added) console.log(indent(green("+ ") + a.symbol + dim(a.exported ? " (exported)" : ""), 4));
+      for (const m of f.modified) console.log(indent(yellow("~ ") + m.symbol + dim(m.exported ? " (exported)" : ""), 4));
+      for (const r of f.removed) console.log(indent(red("- ") + r.symbol + dim(r.exported ? " (exported)" : ""), 4));
+    }
+    if (d.breaking.length > 0) {
+      console.log(`\n${indent(bold(red("\u26a0 Breaking changes (" + d.breaking.length + ")")))}`);
+      for (const b of d.breaking) console.log(indent(`${red(b.symbol)}  ${dim(b.reason)}  ${dim(b.file)}`, 4));
+      console.log(`\n${indent(yellow(d.impactedFiles.length + " file(s) impacted") + dim(" by breaking changes"))}`);
+      for (const f of d.impactedFiles.slice(0, 20)) console.log(indent(dim(f), 4));
+    }
+    console.log();
+  });
+
+// ─── Command: risk ────────────────────────────────────────────────────────────
+
+program
+  .command("risk [dir]")
+  .description("Rank files by refactor risk (git churn × complexity)")
+  .option("--json", "Output as JSON")
+  .option("-n, --top <n>", "Show top N", (v) => parseInt(v, 10), 15)
+  .action(async (dir: string | undefined, opts: { json?: boolean; top: number }) => {
+    if (!isGitRepo(ROOT)) die("not a git repository (or git is unavailable)");
+    const { abs, rel } = resolveArg(dir ?? ".");
+    const files = await computeRisk(abs, ROOT);
+    if (opts.json) return jsonOut({ count: files.length, files });
+    header(`Refactor Risk \u2014 ${rel}/  ${dim("(churn × max complexity)")}`);
+    if (files.length === 0) { console.log(indent(green("✓ nothing risky (no churn × complexity)"))); console.log(); return; }
+    table(
+      files.slice(0, opts.top).map((f) => [String(f.risk), `${f.churn} × ${f.maxComplexity}`, f.file]),
+      [["Risk", 7], ["churn×cx", 12], ["File", 44]],
+    );
     console.log();
   });
 

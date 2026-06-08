@@ -25,6 +25,7 @@ const { discoverWorkspace, findPackageCycles } = await import("../dist/workspace
 const { buildExplorerHtml } = await import("../dist/explorer.js");
 const { readSourceMap } = await import("../dist/sourcemap.js");
 const { buildReport, buildReportHtml } = await import("../dist/report.js");
+const { computeDiff, computeRisk, isGitRepo } = await import("../dist/gitdiff.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -392,6 +393,42 @@ console.log("\n=== Symbol Search ===");
   const html = buildReportHtml(data);
   check("report html self-contained", html.length > 1000 && !/src=["']https?:/.test(html));
   check("report html shows the grade badge", html.includes(">" + data.grade + "<"));
+}
+
+// ─── Git Diff & Risk ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Git Diff & Risk ===");
+  const { execFileSync } = await import("node:child_process");
+  const os = await import("node:os");
+  const fsm = await import("node:fs");
+  const tmp = path.join(os.tmpdir(), "astgit-" + Date.now());
+  const g = (args) => execFileSync("git", args, { cwd: tmp, stdio: "pipe" });
+  let ok = true;
+  try {
+    fsm.mkdirSync(path.join(tmp, "src"), { recursive: true });
+    g(["init", "-q"]); g(["config", "user.email", "t@t"]); g(["config", "user.name", "t"]);
+    fsm.writeFileSync(path.join(tmp, "src/a.ts"), "export function foo(x){return x;}\nexport function gone(){return 0;}\n");
+    fsm.writeFileSync(path.join(tmp, "src/b.ts"), 'import {foo} from "./a";\nexport function useFoo(){return foo(1);}\n');
+    g(["add", "-A"]); g(["commit", "-qm", "init"]);
+    fsm.writeFileSync(path.join(tmp, "src/a.ts"), "export function foo(x,y){return x+y;}\nexport function added(){return 9;}\n");
+
+    check("isGitRepo detects a repo", isGitRepo(tmp));
+    const d = await computeDiff(tmp, tmp, "HEAD");
+    const af = d.files.find((f) => f.file === "src/a.ts");
+    check("foo flagged modified (signature change)", af?.modified.some((x) => x.symbol === "foo") ?? false);
+    check("gone flagged removed", af?.removed.some((x) => x.symbol === "gone") ?? false);
+    check("added flagged added", af?.added.some((x) => x.symbol === "added") ?? false);
+    check("breaking = removed export + sig change (2)", d.breaking.length === 2);
+    check("b.ts impacted by breaking foo", d.impactedFiles.includes("src/b.ts"));
+
+    g(["add", "-A"]); g(["commit", "-qm", "change"]);
+    const risk = await computeRisk(tmp, tmp);
+    check("risk map has churn-weighted files", risk.length >= 1 && risk[0].churn >= 1 && risk[0].risk > 0);
+  } catch (e) {
+    ok = false; check("git diff/risk smoke (git available)", false, e.message);
+  } finally {
+    try { fsm.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

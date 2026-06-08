@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**21 MCP tools / 22 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
+**23 MCP tools / 24 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift
 
@@ -104,6 +104,8 @@ ast-map explore   [dir]            [-o out.html]
 ast-map watch     [dir]            [-o out.html]
 ast-map sourcemap <file>
 ast-map report    [dir]            [-o report.html]
+ast-map diff      [base]           [--dir <d>]   # git-aware changed symbols + impact
+ast-map risk      [dir]            [-n N]        # churn × complexity
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -371,6 +373,30 @@ A one-shot **codebase health summary**: file/symbol counts, language breakdown, 
 ```
 
 **Params:** `path` (optional, defaults to root)
+
+---
+
+### `get_diff`
+**Git-aware.** Compare the working tree to a git ref (default `HEAD`) and return which symbols were added/removed/modified per file, which changes are potentially **breaking** (removed or signature-changed exports), and the **blast radius** — files that depend on those breaking changes. Untracked new files count as additions.
+
+```json
+{ "summary": { "filesChanged": 2, "added": 1, "removed": 1, "modified": 1, "breaking": 2, "impactedFiles": 1 },
+  "breaking": [ { "file": "src/a.ts", "symbol": "foo", "reason": "signature changed" } ],
+  "impactedFiles": ["src/b.ts"] }
+```
+
+**Params:** `base` (optional), `path` (optional)
+
+---
+
+### `get_risk_map`
+Rank files by **refactor risk = git churn × max complexity** — the files that are both frequently changed and complex (the best refactor / test targets).
+
+```json
+{ "files": [ { "file": "src/callgraph.ts", "churn": 7, "maxComplexity": 69, "risk": 483 } ] }
+```
+
+**Params:** `path` (optional)
 
 ---
 
@@ -647,6 +673,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.12.0** | **Git-aware analysis** — `ast-map diff [base]` + `get_diff` tool: changed symbols since a ref, **breaking changes** (removed / signature-changed exports), and blast radius. `ast-map risk` + `get_risk_map` tool: rank files by churn × complexity. Brings a time/history dimension. **23 MCP tools**. |
 | **1.11.0** | **Code-health dashboard** — new `ast-map report` CLI writes a premium self-contained HTML overview (grade A–F, stats, language breakdown, complexity hotspots, god nodes, dead code, cycles) + `get_codebase_report` MCP tool for the same as JSON. |
 | **1.10.0** | **Source-map support** — new `read_source_map` MCP tool + `ast-map sourcemap <file>` CLI: given a compiled JS/CSS file with an inline (`data:`) or external `sourceMappingURL`, returns the original source files it maps back to (honors `sourceRoot`). Traces `dist/` output back to source. |
 | **1.9.0** | **Watch mode** — `ast-map watch [dir]` recomputes the dependency analysis (file count · dead exports · cycles) on every source-file change, debounced; `-o file.html` also regenerates the live explorer each time. Plus: the explorer debug readout is now hidden (toggle with `d`). |
