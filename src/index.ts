@@ -34,6 +34,7 @@ import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
+import { readSourceMap } from "./sourcemap.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -890,6 +891,31 @@ server.registerTool(
         edges: info.edges,
         packageCycles: cycles,
       });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: read_source_map ─────────────────────────────── */
+server.registerTool(
+  "read_source_map",
+  {
+    title: "Read a compiled file's source map",
+    description:
+      "Given a compiled JS/CSS file with an inline (`data:`) or external `sourceMappingURL`, " +
+      "return the original source paths it maps back to. Useful for tracing built output in " +
+      "dist/ back to the real source files.",
+    inputSchema: {
+      path: z.string().describe("Compiled file path, relative to project root or absolute within it."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      const info = readSourceMap(abs, rel.split(path.sep).join("/"));
+      if (!info) return errorText(`No source map found for "${input}".`);
+      return jsonText(info);
     } catch (err) {
       return errorText(describeError(err));
     }

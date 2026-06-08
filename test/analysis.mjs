@@ -23,6 +23,7 @@ const { findUnusedParams } = await import("../dist/unused-params.js");
 const { traceTypeInFile } = await import("../dist/typeflow.js");
 const { discoverWorkspace, findPackageCycles } = await import("../dist/workspace.js");
 const { buildExplorerHtml } = await import("../dist/explorer.js");
+const { readSourceMap } = await import("../dist/sourcemap.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -361,6 +362,20 @@ console.log("\n=== Symbol Search ===");
   const data = m ? JSON.parse(m[1]) : { nodes: [], links: [] };
   check("explorer nodes match graph files", data.nodes.length === graph.stats.fileCount);
   check("explorer has dependency links", data.links.length > 0);
+}
+
+// ─── Source Maps ──────────────────────────────────────────────────────────────
+{
+  console.log("\n=== Source Maps ===");
+  const dir = path.join(__dirname, "fixtures", "sourcemap");
+  const inline = readSourceMap(path.join(dir, "inline.js"), "inline.js");
+  const ext = readSourceMap(path.join(dir, "external.js"), "external.js");
+  check("inline data-URI map parsed", inline?.mapKind === "inline");
+  check("inline sources extracted", (inline?.sources || []).includes("../src/a.ts") && inline.sources.includes("../src/b.ts"));
+  check("inline reports embedded content", inline?.hasContent === true);
+  check("external .map parsed", ext?.mapKind === "external");
+  check("external sourceRoot applied (src/widget.ts)", (ext?.sources || []).includes("src/widget.ts"));
+  check("file with no map -> null", readSourceMap(path.join(__dirname, "fixtures", "sample.ts"), "sample.ts") === null);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

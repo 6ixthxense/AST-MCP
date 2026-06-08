@@ -16,6 +16,7 @@ import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { buildExplorerHtml } from "./explorer.js";
+import { readSourceMap } from "./sourcemap.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -456,6 +457,23 @@ program
     });
 
     await new Promise(() => {}); // keep the process alive
+  });
+
+// ─── Command: sourcemap ───────────────────────────────────────────────────────
+
+program
+  .command("sourcemap <file>")
+  .description("Show the original sources a compiled file maps back to")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    const info = readSourceMap(abs, rel);
+    if (!info) die(`No source map found for "${rel}"`);
+    if (opts.json) return jsonOut(info);
+    header(`Source Map — ${rel}  ${dim("(" + info.mapKind + ")")}`);
+    for (const sourceFile of info.sources) console.log(indent(green("←") + " " + sourceFile));
+    console.log(`\n  ${info.sources.length} original source(s)` + (info.hasContent ? dim(" · embeds sourcesContent") : ""));
+    console.log();
   });
 
 // ─── Command: explore ─────────────────────────────────────────────────────────
