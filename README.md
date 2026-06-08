@@ -101,6 +101,7 @@ ast-map workspace [dir]            [alias: ws]
 ast-map explore   [dir]            [-o out.html]
 ast-map watch     [dir]            [-o out.html]
 ast-map sourcemap <file>
+ast-map report    [dir]            [-o report.html]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -620,6 +621,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.11.0** | **Code-health dashboard** — new `ast-map report` CLI writes a premium self-contained HTML overview (grade A–F, stats, language breakdown, complexity hotspots, god nodes, dead code, cycles) + `get_codebase_report` MCP tool for the same as JSON. |
 | **1.10.0** | **Source-map support** — new `read_source_map` MCP tool + `ast-map sourcemap <file>` CLI: given a compiled JS/CSS file with an inline (`data:`) or external `sourceMappingURL`, returns the original source files it maps back to (honors `sourceRoot`). Traces `dist/` output back to source. |
 | **1.9.0** | **Watch mode** — `ast-map watch [dir]` recomputes the dependency analysis (file count · dead exports · cycles) on every source-file change, debounced; `-o file.html` also regenerates the live explorer each time. Plus: the explorer debug readout is now hidden (toggle with `d`). |
 | **1.8.2** | **Explorer stability fix** — clamp the force layout (distance floor + velocity cap) so nodes that initialize close together can't be flung to huge coordinates, which was blowing up the bounding box and shrinking the whole graph into a corner. Now reliably centers and fills. |
