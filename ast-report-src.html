@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>src — code health</title><style>
+:root{--bg:#fafaf8;--card:#fff;--bd:#e7e5df;--tx:#2b2b28;--dim:#8a8880;--soft:#f1efe9}
+@media(prefers-color-scheme:dark){:root{--bg:#161613;--card:#1e1e1b;--bd:#33332e;--tx:#e6e4dd;--dim:#9a988f;--soft:#26261f}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,sans-serif;line-height:1.5}
+.wrap{max-width:980px;margin:0 auto;padding:32px 24px 60px}
+.hero{display:flex;align-items:center;gap:24px;margin-bottom:28px}
+.badge{width:104px;height:104px;border-radius:24px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;flex:0 0 auto}
+.badge .g{font-size:46px;font-weight:700;line-height:1}.badge .s{font-size:12px;opacity:.9}
+.h1{font-size:26px;font-weight:650;margin:0}.sub{color:var(--dim);font-size:13px;margin-top:4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin-bottom:30px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px 16px}
+.sv{font-size:24px;font-weight:650}.sl{font-size:12px;color:var(--dim);margin-top:2px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:18px 20px;margin-bottom:18px}
+.card h2{font-size:14px;font-weight:600;margin:0 0 14px;letter-spacing:.02em;text-transform:uppercase;color:var(--dim)}
+.row{display:flex;align-items:center;gap:12px;margin:7px 0;font-size:13px}
+.rl{flex:0 0 46%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{flex:1;height:8px;background:var(--soft);border-radius:5px;overflow:hidden}.fill{height:100%;border-radius:5px}
+.rr{flex:0 0 auto;color:var(--dim);min-width:32px;text-align:right}
+.li{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:13px;border-top:1px solid var(--bd)}.li:first-child{border-top:none}
+.mono{font-family:ui-monospace,monospace;font-weight:550}.dim{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{margin-left:auto;background:var(--soft);border-radius:20px;padding:2px 10px;font-size:11px;color:var(--dim);flex:0 0 auto}
+.kbadge{font-size:11px;color:var(--dim);background:var(--soft);border-radius:5px;padding:1px 7px;flex:0 0 auto}
+.ok{color:#1d9e75;font-size:13px}.empty{color:var(--dim);font-size:13px}.more{color:var(--dim);font-size:12px;padding-top:6px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:720px){.two{grid-template-columns:1fr}.rl{flex-basis:42%}}
+.foot{color:var(--dim);font-size:11px;text-align:center;margin-top:24px}
+</style></head><body><div class="wrap">
+<div class="hero">
+  <div class="badge" style="background:#e24b4a"><div class="g">F</div><div class="s">41/100</div></div>
+  <div><h1 class="h1">src — code health</h1>
+  <div class="sub">33 files · 324 symbols · 1 language(s) · 2026-06-08</div></div>
+</div>
+<div class="grid">
+  <div class="stat"><div class="sv">33</div><div class="sl">Files</div></div>
+  <div class="stat"><div class="sv">324</div><div class="sl">Symbols</div></div>
+  <div class="stat"><div class="sv">260</div><div class="sl">Import edges</div></div>
+  <div class="stat"><div class="sv">6.2</div><div class="sl">Avg complexity</div></div>
+  <div class="stat"><div class="sv" style="color:#e24b4a">69</div><div class="sl">Max complexity</div></div>
+  <div class="stat"><div class="sv" style="color:#d85a30">13</div><div class="sl">Dead exports</div></div>
+  <div class="stat"><div class="sv" style="color:#1d9e75">0</div><div class="sl">Cycles</div></div>
+</div>
+<div class="card"><h2>Language breakdown</h2><div class="row"><div class="rl">typescript</div><div class="track"><div class="fill" style="width:100%;background:#534ab7"></div></div><div class="rr">33</div></div></div>
+<div class="card"><h2>Complexity hotspots</h2><div class="row"><div class="rl">buildCallGraph  ·  src/callgraph.ts</div><div class="track"><div class="fill" style="width:100%;background:#e24b4a"></div></div><div class="rr"><b>69</b></div></div><div class="row"><div class="rl">collectCalls  ·  src/callgraph.ts</div><div class="track"><div class="fill" style="width:54%;background:#e24b4a"></div></div><div class="rr"><b>37</b></div></div><div class="row"><div class="rl">handle  ·  src/extractors/cpp.ts</div><div class="track"><div class="fill" style="width:48%;background:#e24b4a"></div></div><div class="rr"><b>33</b></div></div><div class="row"><div class="rl">resolveCrossLangTarget  ·  src/crosslang.ts</div><div class="track"><div class="fill" style="width:46%;background:#e24b4a"></div></div><div class="rr"><b>32</b></div></div><div class="row"><div class="rl">handle  ·  src/extractors/typescript.ts</div><div class="track"><div class="fill" style="width:41%;background:#e24b4a"></div></div><div class="rr"><b>28</b></div></div><div class="row"><div class="rl">handle  ·  src/extractors/swift.ts</div><div class="track"><div class="fill" style="width:33%;background:#e24b4a"></div></div><div class="rr"><b>23</b></div></div><div class="row"><div class="rl">buildSymbolGraph  ·  src/graph.ts</div><div class="track"><div class="fill" style="width:30%;background:#e24b4a"></div></div><div class="rr"><b>21</b></div></div><div class="row"><div class="rl">handle  ·  src/extractors/c.ts</div><div class="track"><div class="fill" style="width:29%;background:#d85a30"></div></div><div class="rr"><b>20</b></div></div><div class="row"><div class="rl">nameFromDeclarator  ·  src/extractors/cpp.ts</div><div class="track"><div class="fill" style="width:29%;background:#d85a30"></div></div><div class="rr"><b>20</b></div></div><div class="row"><div class="rl">parseImportStatement  ·  src/extractors/typescript.ts</div><div class="track"><div class="fill" style="width:29%;background:#d85a30"></div></div><div class="rr"><b>20</b></div></div><div class="row"><div class="rl">traceTypeInFile  ·  src/typeflow.ts</div><div class="track"><div class="fill" style="width:29%;background:#d85a30"></div></div><div class="rr"><b>20</b></div></div><div class="row"><div class="rl">handle  ·  src/extractors/csharp.ts</div><div class="track"><div class="fill" style="width:28%;background:#d85a30"></div></div><div class="rr"><b>19</b></div></div></div>
+<div class="two">
+  <div class="card"><h2>God nodes (most imported)</h2><div class="li"><span class="mono">SymbolNode</span><span class="dim">src/types.ts</span><span class="pill">18 importers</span></div><div class="li"><span class="mono">TSNode</span><span class="dim">src/parser.ts</span><span class="pill">16 importers</span></div><div class="li"><span class="mono">ImportRef</span><span class="dim">src/types.ts</span><span class="pill">15 importers</span></div><div class="li"><span class="mono">makeSymbol</span><span class="dim">src/extractors/common.ts</span><span class="pill">10 importers</span></div><div class="li"><span class="mono">namedChildren</span><span class="dim">src/parser.ts</span><span class="pill">10 importers</span></div><div class="li"><span class="mono">headerSignature</span><span class="dim">src/parser.ts</span><span class="pill">10 importers</span></div><div class="li"><span class="mono">nameOf</span><span class="dim">src/parser.ts</span><span class="pill">9 importers</span></div><div class="li"><span class="mono">leadingComment</span><span class="dim">src/parser.ts</span><span class="pill">9 importers</span></div></div>
+  <div class="card"><h2>Circular dependencies</h2><div class="ok">✓ No circular dependencies</div></div>
+</div>
+<div class="card"><h2>Dead exports (high confidence)</h2><div class="li"><span class="kbadge">function</span><span class="mono">hasDirective</span><span class="dim">src/analysis.ts</span></div><div class="li"><span class="kbadge">const</span><span class="mono">DEFAULT_IGNORE</span><span class="dim">src/config.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">resolveRustModule</span><span class="dim">src/crosslang.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">resolveGoImport</span><span class="dim">src/crosslang.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">clearGoModuleCache</span><span class="dim">src/crosslang.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">resolveCInclude</span><span class="dim">src/crosslang.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">lineRange</span><span class="dim">src/extractors/common.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">initParser</span><span class="dim">src/parser.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">clearCrossLangIndexCache</span><span class="dim">src/resolver.ts</span></div><div class="li"><span class="kbadge">const</span><span class="mono">SCHEMA_VERSION</span><span class="dim">src/skeleton.ts</span></div><div class="li"><span class="kbadge">const</span><span class="mono">GRAMMAR_SOURCE</span><span class="dim">src/skeleton.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">resolveWorkspaceImport</span><span class="dim">src/workspace.ts</span></div><div class="li"><span class="kbadge">function</span><span class="mono">clearWorkspaceCache</span><span class="dim">src/workspace.ts</span></div></div>
+<div class="foot">Generated by AST-MCP · universal-ast-mapper</div>
+</div></body></html>

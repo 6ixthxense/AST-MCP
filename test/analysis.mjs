@@ -24,6 +24,7 @@ const { traceTypeInFile } = await import("../dist/typeflow.js");
 const { discoverWorkspace, findPackageCycles } = await import("../dist/workspace.js");
 const { buildExplorerHtml } = await import("../dist/explorer.js");
 const { readSourceMap } = await import("../dist/sourcemap.js");
+const { buildReport, buildReportHtml } = await import("../dist/report.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -376,6 +377,21 @@ console.log("\n=== Symbol Search ===");
   check("external .map parsed", ext?.mapKind === "external");
   check("external sourceRoot applied (src/widget.ts)", (ext?.sources || []).includes("src/widget.ts"));
   check("file with no map -> null", readSourceMap(path.join(__dirname, "fixtures", "sample.ts"), "sample.ts") === null);
+}
+
+// ─── Codebase Report ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Codebase Report ===");
+  const data = await buildReport(GRAPH_DIR, GRAPH_DIR);
+  check("report has a grade A-F", /^[A-F]$/.test(data.grade));
+  check("score in 0..100", data.score >= 0 && data.score <= 100);
+  check("counts files", data.fileCount > 0);
+  check("language breakdown present", data.languages.length > 0 && data.languages[0].lang === "typescript");
+  check("detects the cycle fixture", data.cycles.count >= 1);
+  check("complexity hotspots sorted desc", data.complexity.hotspots.length === 0 || data.complexity.hotspots.every((h, i, a) => i === 0 || a[i-1].complexity >= h.complexity));
+  const html = buildReportHtml(data);
+  check("report html self-contained", html.length > 1000 && !/src=["']https?:/.test(html));
+  check("report html shows the grade badge", html.includes(">" + data.grade + "<"));
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

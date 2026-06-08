@@ -35,6 +35,7 @@ import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { readSourceMap } from "./sourcemap.js";
+import { buildReport } from "./report.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -916,6 +917,33 @@ server.registerTool(
       const info = readSourceMap(abs, rel.split(path.sep).join("/"));
       if (!info) return errorText(`No source map found for "${input}".`);
       return jsonText(info);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_codebase_report ─────────────────────────── */
+server.registerTool(
+  "get_codebase_report",
+  {
+    title: "Codebase health report",
+    description:
+      "Scan a directory and return a one-shot health summary: file/symbol counts, language " +
+      "breakdown, a health grade (A\u2013F) and score, complexity hotspots, god nodes (most-imported " +
+      "symbols), dead exports, and circular dependencies. The `ast-map report` CLI renders this as HTML.",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to scan. Defaults to the project root."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. get_codebase_report requires a directory.`);
+      }
+      const data = await buildReport(abs, ROOT);
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
     } catch (err) {
       return errorText(describeError(err));
     }

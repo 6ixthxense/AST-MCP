@@ -17,6 +17,7 @@ import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { buildExplorerHtml } from "./explorer.js";
 import { readSourceMap } from "./sourcemap.js";
+import { buildReport, buildReportHtml } from "./report.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -473,6 +474,28 @@ program
     header(`Source Map — ${rel}  ${dim("(" + info.mapKind + ")")}`);
     for (const sourceFile of info.sources) console.log(indent(green("←") + " " + sourceFile));
     console.log(`\n  ${info.sources.length} original source(s)` + (info.hasContent ? dim(" · embeds sourcesContent") : ""));
+    console.log();
+  });
+
+// ─── Command: report ──────────────────────────────────────────────────────────
+
+program
+  .command("report [dir]")
+  .description("Generate a code-health dashboard (HTML)")
+  .option("-o, --out <file>", "Output HTML path", "ast-report.html")
+  .option("--json", "Print the report data as JSON")
+  .action(async (dir: string | undefined, opts: { out: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+    const data = await buildReport(abs, ROOT);
+    if (opts.json) return jsonOut(data);
+    const out = path.resolve(process.cwd(), opts.out);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, buildReportHtml(data), "utf8");
+    header(`Code Health \u2014 ${rel}/  ${dim(`(${data.fileCount} files)`)}`);
+    const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
+    console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max}`));
+    console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
     console.log();
   });
 
