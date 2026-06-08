@@ -6,6 +6,11 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.11.0] — 2026-06-01 · Code-health dashboard
+- **`ast-map report`** writes a premium self-contained HTML dashboard: health
+  grade (A–F), stats, language breakdown, complexity hotspots, god nodes, dead
+  code, and cycles. **`get_codebase_report`** MCP tool returns the same as JSON.
+
 ## [1.10.0] — 2026-06-01 · Source maps
 - **`read_source_map`** MCP tool + **`ast-map sourcemap <file>`** CLI: trace a
   compiled JS/CSS file (inline `data:` or external `.map`) back to its original
@@ -112,6 +117,7 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 - **0.2.0** — import extraction; `resolve_imports`; `build_symbol_graph`.
 - **0.1.0** — `get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture`.
 
+[1.11.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.11.0
 [1.10.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.10.0
 [1.9.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.9.0
 [1.8.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.8.0
