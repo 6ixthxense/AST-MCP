@@ -6,6 +6,11 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.12.0] — 2026-06-08 · Git-aware analysis
+- **`ast-map diff [base]`** + **`get_diff`**: changed symbols since a git ref,
+  breaking changes (removed / signature-changed exports), and blast radius.
+- **`ast-map risk`** + **`get_risk_map`**: rank files by churn × complexity.
+
 ## [1.11.0] — 2026-06-01 · Code-health dashboard
 - **`ast-map report`** writes a premium self-contained HTML dashboard: health
   grade (A–F), stats, language breakdown, complexity hotspots, god nodes, dead
@@ -117,6 +122,7 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 - **0.2.0** — import extraction; `resolve_imports`; `build_symbol_graph`.
 - **0.1.0** — `get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture`.
 
+[1.12.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.12.0
 [1.11.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.11.0
 [1.10.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.10.0
 [1.9.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.9.0
