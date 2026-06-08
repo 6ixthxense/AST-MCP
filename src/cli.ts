@@ -19,6 +19,7 @@ import { buildExplorerHtml } from "./explorer.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport, buildReportHtml } from "./report.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
+import { packContext } from "./contextpack.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -475,6 +476,35 @@ program
     header(`Source Map — ${rel}  ${dim("(" + info.mapKind + ")")}`);
     for (const sourceFile of info.sources) console.log(indent(green("←") + " " + sourceFile));
     console.log(`\n  ${info.sources.length} original source(s)` + (info.hasContent ? dim(" · embeds sourcesContent") : ""));
+    console.log();
+  });
+
+// ─── Command: pack ────────────────────────────────────────────────────────────
+
+program
+  .command("pack <file> [symbol]")
+  .description("Minimal context pack for a symbol (source + dep signatures + dependents)")
+  .option("--scan <dir>", "Directory to scan for dependents", ".")
+  .option("--json", "Output as JSON")
+  .action(async (file: string, symbol: string | undefined, opts: { scan: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(file);
+    if (fs.statSync(abs).isDirectory()) die(`"${rel}" is a directory; pass a file`);
+    const scanAbs = resolveArg(opts.scan).abs;
+    const pack = await packContext(abs, rel, ROOT, symbol, scanAbs);
+    if (opts.json) return jsonOut(pack);
+    header(`Context Pack \u2014 ${rel}${symbol ? "::" + symbol : ""}  ${dim("(~" + pack.tokenEstimate + " tokens)")}`);
+    console.log(indent(bold("Primary") + dim(`  lines ${pack.primary.startLine}-${pack.primary.endLine}`)));
+    console.log();
+    console.log(indent(bold("Depends on:")));
+    if (pack.dependencies.length === 0) console.log(indent(dim("(none in-project)"), 4));
+    for (const d of pack.dependencies) {
+      console.log(indent(green(d.file), 4));
+      for (const sym of d.symbols) console.log(indent(dim((sym.signature || sym.name)), 6));
+    }
+    console.log();
+    console.log(indent(bold("Depended on by:")));
+    if (pack.dependents.length === 0) console.log(indent(dim("(none found in scan)"), 4));
+    for (const dep of pack.dependents) console.log(indent(yellow(dep.file), 4));
     console.log();
   });
 

@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**23 MCP tools / 24 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
+**24 MCP tools / 25 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift
 
@@ -106,6 +106,7 @@ ast-map sourcemap <file>
 ast-map report    [dir]            [-o report.html]
 ast-map diff      [base]           [--dir <d>]   # git-aware changed symbols + impact
 ast-map risk      [dir]            [-n N]        # churn × complexity
+ast-map pack      <file> [symbol]  [--scan <d>] # minimal context pack
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -386,6 +387,19 @@ A one-shot **codebase health summary**: file/symbol counts, language breakdown, 
 ```
 
 **Params:** `base` (optional), `path` (optional)
+
+---
+
+### `pack_context`
+**Token-efficient.** Assemble the *minimal* context to understand or change a symbol — its own source, the **signatures** of what it depends on (resolved imports), and the files that depend on it — instead of reading whole files. Returns a token estimate so you can see the savings.
+
+```json
+{ "primary": { "symbol": "login", "startLine": 8, "endLine": 12, "source": "…" },
+  "dependencies": [ { "file": "utils.ts", "symbols": [ { "name": "hashPassword", "signature": "…" } ] } ],
+  "dependents": [ { "file": "router.ts" } ], "tokenEstimate": 56 }
+```
+
+**Params:** `path`, `symbol` (optional), `scan` (optional)
 
 ---
 
@@ -673,6 +687,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.13.0** | **Context-pack** — new `pack_context` MCP tool + `ast-map pack <file> [symbol]` CLI: the minimal context to work on a symbol (its source + the signatures it depends on + its dependents) with a token estimate, instead of reading whole files. **24 MCP tools**. |
 | **1.12.0** | **Git-aware analysis** — `ast-map diff [base]` + `get_diff` tool: changed symbols since a ref, **breaking changes** (removed / signature-changed exports), and blast radius. `ast-map risk` + `get_risk_map` tool: rank files by churn × complexity. Brings a time/history dimension. **23 MCP tools**. |
 | **1.11.0** | **Code-health dashboard** — new `ast-map report` CLI writes a premium self-contained HTML overview (grade A–F, stats, language breakdown, complexity hotspots, god nodes, dead code, cycles) + `get_codebase_report` MCP tool for the same as JSON. |
 | **1.10.0** | **Source-map support** — new `read_source_map` MCP tool + `ast-map sourcemap <file>` CLI: given a compiled JS/CSS file with an inline (`data:`) or external `sourceMappingURL`, returns the original source files it maps back to (honors `sourceRoot`). Traces `dist/` output back to source. |

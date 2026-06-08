@@ -26,6 +26,7 @@ const { buildExplorerHtml } = await import("../dist/explorer.js");
 const { readSourceMap } = await import("../dist/sourcemap.js");
 const { buildReport, buildReportHtml } = await import("../dist/report.js");
 const { computeDiff, computeRisk, isGitRepo } = await import("../dist/gitdiff.js");
+const { packContext } = await import("../dist/contextpack.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -429,6 +430,18 @@ console.log("\n=== Symbol Search ===");
   } finally {
     try { fsm.rmSync(tmp, { recursive: true, force: true }); } catch {}
   }
+}
+
+// ─── Context Pack ─────────────────────────────────────────────────────────────
+{
+  console.log("\n=== Context Pack ===");
+  const dir = GRAPH_DIR;
+  const pack = await packContext(path.join(dir, "auth.ts"), "auth.ts", dir, "login", dir);
+  check("primary is the login symbol range", pack.primary.symbol === "login" && pack.primary.source.includes("function login"));
+  check("dependency on utils.ts captured", pack.dependencies.some((d) => d.file === "utils.ts"));
+  check("dependency signatures included", pack.dependencies.some((d) => d.symbols.some((x) => x.name === "hashPassword" && x.signature)));
+  check("dependents include router.ts", pack.dependents.some((d) => d.file === "router.ts"));
+  check("token estimate is small (minimal pack)", pack.tokenEstimate > 0 && pack.tokenEstimate < 400);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

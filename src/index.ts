@@ -37,6 +37,7 @@ import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport } from "./report.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
+import { packContext } from "./contextpack.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -996,6 +997,34 @@ server.registerTool(
       const { abs, rel } = resolveInRoot(input ?? ".");
       const files = await computeRisk(abs, ROOT);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: files.length, files: files.slice(0, 50) });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: pack_context ────────────────────────────────── */
+server.registerTool(
+  "pack_context",
+  {
+    title: "Minimal context pack for a symbol",
+    description:
+      "Assemble the *minimal* context needed to understand or change a symbol \u2014 the symbol's own " +
+      "source, the signatures of what it depends on (resolved imports), and the files that depend on " +
+      "it \u2014 instead of reading whole files. Returns a token estimate so you can see the savings.",
+    inputSchema: {
+      path: z.string().describe("File containing the symbol (relative to root or absolute within it)."),
+      symbol: z.string().optional().describe("Symbol name to centre the pack on. Omit for the whole file."),
+      scan: z.string().optional().describe("Directory to scan for dependents. Default: project root."),
+    },
+  },
+  async ({ path: input, symbol, scan }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) return errorText(`"${input}" is a directory; pass a file.`);
+      const scanAbs = scan ? resolveInRoot(scan).abs : ROOT;
+      const pack = await packContext(abs, rel.split(path.sep).join("/"), ROOT, symbol, scanAbs);
+      return jsonText(pack);
     } catch (err) {
       return errorText(describeError(err));
     }
