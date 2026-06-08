@@ -4,6 +4,8 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
+**21 MCP tools / 22 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
+
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift
 
 | Capability               | TS/JS | Python | Go  | Rust | Java | C#  | C   | C++ | Kt  | Swift |
@@ -342,6 +344,30 @@ Scan a file or directory for **named functions/methods with parameters that are 
   "edges": [ { "from": "@demo/a", "to": "@demo/b" } ],
   "packageCycles": []
 }
+```
+
+**Params:** `path` (optional, defaults to root)
+
+---
+
+### `read_source_map`
+Given a compiled JS/CSS file with an inline (`data:`) or external `sourceMappingURL`, return the **original source files** it maps back to (honors `sourceRoot`; reports embedded `sourcesContent`).
+
+```json
+{ "file": "dist/bundle.js", "mapKind": "inline", "sources": ["../src/app.ts", "../src/util.ts"], "hasContent": true }
+```
+
+**Params:** `path`
+
+---
+
+### `get_codebase_report`
+A one-shot **codebase health summary**: file/symbol counts, language breakdown, a health **grade (A–F)** + score, complexity hotspots, god nodes, dead exports, and circular dependencies. Rendered as a premium HTML dashboard by `ast-map report`.
+
+```json
+{ "grade": "B", "score": 82, "fileCount": 120, "symbolCount": 1400,
+  "complexity": { "average": 4.1, "max": 22, "hotspots": [ … ] },
+  "godNodes": [ … ], "dead": { "count": 3, "items": [ … ] }, "cycles": { "count": 0, "items": [] } }
 ```
 
 **Params:** `path` (optional, defaults to root)
