@@ -12,6 +12,7 @@
     "dist",
     "scripts",
     "README.md",
+    "CHANGELOG.md",
     "BLUEPRINT.md"
   ],
   "scripts": {
