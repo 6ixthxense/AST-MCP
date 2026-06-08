@@ -6,6 +6,11 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.13.0] — 2026-06-08 · Context-pack
+- **`pack_context`** + **`ast-map pack <file> [symbol]`**: the minimal context to
+  work on a symbol — its source, the signatures it depends on, and its dependents
+  — with a token estimate, instead of reading whole files.
+
 ## [1.12.0] — 2026-06-08 · Git-aware analysis
 - **`ast-map diff [base]`** + **`get_diff`**: changed symbols since a git ref,
   breaking changes (removed / signature-changed exports), and blast radius.
@@ -122,6 +127,7 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 - **0.2.0** — import extraction; `resolve_imports`; `build_symbol_graph`.
 - **0.1.0** — `get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture`.
 
+[1.13.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.13.0
 [1.12.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.12.0
 [1.11.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.11.0
 [1.10.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.10.0
