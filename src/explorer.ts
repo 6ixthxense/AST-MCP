@@ -56,7 +56,7 @@ const STYLE =
 const CLIENT =
   "var c=document.getElementById('cv'),ctx=c.getContext('2d'),tip=document.getElementById('tip'),panel=document.getElementById('panel');" +
   "var PANELW=300,panelOpen=false;" +
-  "var W,H;function resize(){var r=devicePixelRatio||1;var b=c.getBoundingClientRect();W=Math.round(b.width)||c.clientWidth||innerWidth;H=Math.round(b.height)||c.clientHeight||(innerHeight-48);c.width=W*r;c.height=H*r;ctx.setTransform(r,0,0,r,0,0);}addEventListener('resize',function(){resize();});resize();" +
+  "var W,H;function resize(){var r=devicePixelRatio||1;W=innerWidth||c.clientWidth||800;H=(innerHeight-48)||c.clientHeight||600;c.width=W*r;c.height=H*r;ctx.setTransform(r,0,0,r,0,0);}addEventListener('resize',function(){resize();});resize();" +
   "function availW(){return W-(panelOpen?PANELW:0);}" +
   "var nodes=DATA.nodes,links=DATA.links,byId={};nodes.forEach(function(n){byId[n.id]=n;n.vx=0;n.vy=0;});" +
   "var deg={},out={},inn={};links.forEach(function(l){deg[l.source]=(deg[l.source]||0)+1;deg[l.target]=(deg[l.target]||0)+1;(out[l.source]=out[l.source]||[]).push(l.target);(inn[l.target]=inn[l.target]||[]).push(l.source);});" +
@@ -84,7 +84,7 @@ const CLIENT =
   "function dot(n,orphan){var dim=(sel&&n!==sel&&(adj[sel.id]||[]).indexOf(n.id)<0)||(q&&n.id.toLowerCase().indexOf(q)<0);ctx.globalAlpha=dim?0.14:(orphan?0.55:1);ctx.beginPath();ctx.arc(n.x,n.y,orphan?3.2:radius(n),0,6.2832);ctx.fillStyle=color(n.group);ctx.fill();if(n===sel||n===hover){ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();ctx.lineWidth=0.8;}}" +
   "orphans.forEach(function(n){dot(n,true);});sim.forEach(function(n){dot(n,false);});" +
   "ctx.globalAlpha=1;ctx.fillStyle=getComputedStyle(document.body).color;ctx.font='11px system-ui';sim.forEach(function(n){if(n===sel||n===hover||n.symbols>=14){ctx.fillText(n.id.split('/').pop(),n.x+radius(n)+3,n.y+3);}});ctx.restore();}" +
-  "function loop(){var bb=c.getBoundingClientRect();var w=Math.round(bb.width)||innerWidth,hh=Math.round(bb.height)||(innerHeight-48);if(w&&hh&&(w!==W||hh!==H))resize();tick();tick();layoutOrphans();if(autofit)fitView();draw();requestAnimationFrame(loop);}" +
+  "function loop(){var w=innerWidth,hh=innerHeight-48;if(w&&hh&&(w!==W||hh!==H))resize();tick();tick();layoutOrphans();if(autofit)fitView();draw();var bx=bb4(nodes);document.getElementById(\"dbg\").textContent=\"W=\"+W+\" H=\"+H+\" iw=\"+innerWidth+\"x\"+innerHeight+\" dpr=\"+(devicePixelRatio||1)+\" k=\"+view.k.toFixed(2)+\" vx=\"+Math.round(view.x)+\" vy=\"+Math.round(view.y)+\" fit=\"+autofit+\" sim=\"+sim.length+\" orph=\"+orphans.length+\" worldBox=\"+Math.round(bx[0])+\",\"+Math.round(bx[1])+\"..\"+Math.round(bx[2])+\",\"+Math.round(bx[3]);requestAnimationFrame(loop);}" +
   "function world(e){return{x:(e.clientX-view.x)/view.k,y:(e.clientY-48-view.y)/view.k};}" +
   "function pick(p){var all=sim.concat(orphans);for(var i=all.length-1;i>=0;i--){var n=all[i];var r=(deg[n.id]?radius(n):3.2)+5;if((p.x-n.x)*(p.x-n.x)+(p.y-n.y)*(p.y-n.y)<=r*r)return n;}return null;}" +
   "c.addEventListener('mousedown',function(e){autofit=false;var n=pick(world(e));if(n){drag=n;showPanel(n);}else{pan={x:e.clientX-view.x,y:e.clientY-view.y};}});" +
@@ -104,7 +104,7 @@ export function buildExplorerHtml(graph: SymbolGraph, root: string): string {
     "<title>AST-MCP — " + title + " graph</title><style>" + STYLE + "</style></head><body>" +
     "<div id=\"bar\"><h1>AST-MCP graph</h1><span class=\"muted\">" + data.nodes.length + " files · " + data.links.length + " edges · drag / scroll / click</span>" +
     "<input id=\"q\" placeholder=\"filter files…\" /></div>" +
-    "<canvas id=\"cv\"></canvas><div id=\"tip\"></div><div id=\"panel\"></div>" +
+    "<canvas id=\"cv\"></canvas><div id=\"tip\"></div><div id=\"panel\"></div><div id=\"dbg\" style=\"position:fixed;left:8px;bottom:8px;font:11px monospace;color:#e07;z-index:6;pointer-events:none;white-space:pre\"></div>" +
     "<script>var DATA=" + dataJson + ";</script><script>" + CLIENT + "</script></body></html>"
   );
 }
