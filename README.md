@@ -99,6 +99,7 @@ ast-map unused-params <path>       [alias: unused]
 ast-map trace-type <type> [dir]    [alias: flow]
 ast-map workspace [dir]            [alias: ws]
 ast-map explore   [dir]            [-o out.html]
+ast-map watch     [dir]            [-o out.html]
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -618,6 +619,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.9.0** | **Watch mode** — `ast-map watch [dir]` recomputes the dependency analysis (file count · dead exports · cycles) on every source-file change, debounced; `-o file.html` also regenerates the live explorer each time. Plus: the explorer debug readout is now hidden (toggle with `d`). |
 | **1.8.2** | **Explorer stability fix** — clamp the force layout (distance floor + velocity cap) so nodes that initialize close together can't be flung to huge coordinates, which was blowing up the bounding box and shrinking the whole graph into a corner. Now reliably centers and fills. |
 | **1.8.1** | **Explorer self-heal sizing** — the explorer now re-checks canvas size every frame and re-fits, so it always centers/fills even if the canvas reports zero size at load (and survives container resizes). |
 | **1.8.0** | **Explorer detail sidebar** — click a file in `ast-map explore` to open a side panel: language, symbol count, its symbols, the files it imports, and the files that import it — each clickable to jump to that file. |

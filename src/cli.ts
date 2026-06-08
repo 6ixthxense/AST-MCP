@@ -408,6 +408,56 @@ program
     console.log();
   });
 
+// ─── Command: watch ───────────────────────────────────────────────────────────
+
+program
+  .command("watch [dir]")
+  .description("Rebuild analysis (and optionally the explorer) when files change")
+  .option("-o, --out <file>", "Also regenerate the explorer HTML on each change")
+  .action(async (dir: string | undefined, opts: { out?: string }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    let building = false;
+    let queued = false;
+    async function rebuild(reason: string) {
+      if (building) { queued = true; return; }
+      building = true;
+      try {
+        const skels = await gatherSkeletons(abs);
+        const graph = buildSymbolGraph(skels, ROOT);
+        const dead = findDeadExports(graph).filter((d) => d.confidence === "high").length;
+        const cycles = findCircularDeps(graph).length;
+        let line = `${dim(new Date().toLocaleTimeString())}  ${bold(String(skels.length))} files · ${dead} dead · ${cycles} cycle(s)`;
+        if (opts.out) {
+          fs.writeFileSync(path.resolve(process.cwd(), opts.out), buildExplorerHtml(graph, abs), "utf8");
+          line += ` · ${green("explorer updated")}`;
+        }
+        line += `  ${dim(reason)}`;
+        console.log(line);
+      } finally {
+        building = false;
+        if (queued) { queued = false; rebuild("(coalesced)"); }
+      }
+    }
+
+    header(`Watching ${rel}/  ${dim("(Ctrl+C to stop)")}`);
+    await rebuild("initial");
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const exts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs", ".c", ".cpp", ".h", ".hpp", ".kt", ".swift"]);
+    fs.watch(abs, { recursive: true }, (_evt, file) => {
+      if (!file) return;
+      const f = String(file).split(path.sep).join("/");
+      if (/(^|\/)(node_modules|\.git|dist|\.ast-map)(\/|$)/.test(f)) return;
+      if (!exts.has(path.extname(f).toLowerCase())) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => rebuild(`(${f.split("/").pop()} changed)`), 300);
+    });
+
+    await new Promise(() => {}); // keep the process alive
+  });
+
 // ─── Command: explore ─────────────────────────────────────────────────────────
 
 program

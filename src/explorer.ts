@@ -92,7 +92,8 @@ const CLIENT =
   "addEventListener('mousemove',function(e){var p=world(e);if(drag){drag.x=p.x;drag.y=p.y;drag.vx=0;drag.vy=0;}else if(pan){view.x=e.clientX-pan.x;view.y=e.clientY-pan.y;}else{hover=pick(p);if(hover){tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';tip.textContent=hover.id+'  ·  '+(hover.symbols||0)+' symbols  ·  '+hover.lang;}else tip.style.display='none';}});" +
   "addEventListener('mouseup',function(){drag=null;pan=null;});" +
   "c.addEventListener('wheel',function(e){e.preventDefault();autofit=false;var s=e.deltaY<0?1.1:0.9;var mx=e.clientX,my=e.clientY-48;view.x=mx-(mx-view.x)*s;view.y=my-(my-view.y)*s;view.k*=s;},{passive:false});" +
-  "document.getElementById('q').addEventListener('input',function(e){q=e.target.value.toLowerCase();});loop();";
+  "document.getElementById('q').addEventListener('input',function(e){q=e.target.value.toLowerCase();});" +
+  "addEventListener('keydown',function(e){if(e.key==='d'&&e.target.tagName!=='INPUT'){var x=document.getElementById('dbg');x.style.display=x.style.display==='none'?'block':'none';}});loop();";
 
 /** Build a self-contained, dependency-free HTML graph explorer. */
 export function buildExplorerHtml(graph: SymbolGraph, root: string): string {
@@ -104,7 +105,7 @@ export function buildExplorerHtml(graph: SymbolGraph, root: string): string {
     "<title>AST-MCP — " + title + " graph</title><style>" + STYLE + "</style></head><body>" +
     "<div id=\"bar\"><h1>AST-MCP graph</h1><span class=\"muted\">" + data.nodes.length + " files · " + data.links.length + " edges · drag / scroll / click</span>" +
     "<input id=\"q\" placeholder=\"filter files…\" /></div>" +
-    "<canvas id=\"cv\"></canvas><div id=\"tip\"></div><div id=\"panel\"></div><div id=\"dbg\" style=\"position:fixed;left:8px;bottom:8px;font:11px monospace;color:#e07;z-index:6;pointer-events:none;white-space:pre\"></div>" +
+    "<canvas id=\"cv\"></canvas><div id=\"tip\"></div><div id=\"panel\"></div><div id=\"dbg\" style=\"position:fixed;left:8px;bottom:8px;font:11px monospace;color:#e07;z-index:6;pointer-events:none;white-space:pre;display:none\"></div>" +
     "<script>var DATA=" + dataJson + ";</script><script>" + CLIENT + "</script></body></html>"
   );
 }
