@@ -38,6 +38,7 @@ import { traceTypeInFile } from "./typeflow.js";
 import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport } from "./report.js";
+import { runQualityGate } from "./check.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
@@ -964,6 +965,42 @@ server.registerTool(
       }
       const data = await buildReport(abs, ROOT);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: check_quality_gate ──────────────────────────── */
+server.registerTool(
+  "check_quality_gate",
+  {
+    title: "Quality gate (thresholds + baseline ratchet)",
+    description:
+      "Run the CI quality gate over a directory: evaluates absolute thresholds (from " +
+      "`.ast-map.config.json` \u2192 `check`) and a **baseline ratchet** against " +
+      "`.ast-map.baseline.json` \u2014 fails when cycles, dead exports, SDP violations, " +
+      "very-high-complexity functions, or the health score regress. " +
+      "Set updateBaseline to re-anchor the baseline at the current metrics.",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to gate. Defaults to the project root."),
+      baseline: z.string().optional().describe("Baseline file path. Default .ast-map.baseline.json."),
+      updateBaseline: z.boolean().optional().describe("Write current metrics as the new baseline."),
+    },
+  },
+  async ({ path: input, baseline, updateBaseline }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. check_quality_gate requires a directory.`);
+      }
+      const thresholds = loadProjectConfig(ROOT).check;
+      const result = await runQualityGate(abs, ROOT, {
+        baselinePath: baseline,
+        thresholds,
+        updateBaseline,
+      });
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...result });
     } catch (err) {
       return errorText(describeError(err));
     }

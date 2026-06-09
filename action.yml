@@ -1,5 +1,5 @@
 name: "AST-MCP Validate"
-description: "Run ast-map architecture + structural validation on your codebase as a CI gate."
+description: "Run ast-map architecture validation and/or the quality gate (baseline ratchet) as a CI gate."
 author: "6ixthxense"
 branding:
   icon: "git-branch"
@@ -13,25 +13,40 @@ inputs:
     description: "npm version/tag of universal-ast-mapper to run."
     required: false
     default: "latest"
+  mode:
+    description: "validate (structural rules), check (quality gate: thresholds + baseline ratchet), or both."
+    required: false
+    default: "validate"
   max-lines:
-    description: "Max lines per file before a large-file warning."
+    description: "[validate] Max lines per file before a large-file warning."
     required: false
     default: "400"
   max-imports:
-    description: "Max imports per file before a too-many-imports warning."
+    description: "[validate] Max imports per file before a too-many-imports warning."
     required: false
     default: "20"
   max-exports:
-    description: "Max exports per file before a god-export warning."
+    description: "[validate] Max exports per file before a god-export warning."
     required: false
     default: "15"
+  check-args:
+    description: "[check] Extra flags for ast-map check (e.g. --min-score 70 --max-cycles 0). Baseline is read from .ast-map.baseline.json in the repo."
+    required: false
+    default: ""
 runs:
   using: "composite"
   steps:
     - name: Run ast-map validate
+      if: ${{ inputs.mode == 'validate' || inputs.mode == 'both' }}
       shell: bash
       run: >
         npx -y -p universal-ast-mapper@${{ inputs.version }} ast-map validate "${{ inputs.path }}"
         --max-lines ${{ inputs.max-lines }}
         --max-imports ${{ inputs.max-imports }}
         --max-exports ${{ inputs.max-exports }}
+    - name: Run ast-map check (quality gate)
+      if: ${{ inputs.mode == 'check' || inputs.mode == 'both' }}
+      shell: bash
+      run: >
+        npx -y -p universal-ast-mapper@${{ inputs.version }} ast-map check "${{ inputs.path }}"
+        ${{ inputs.check-args }}

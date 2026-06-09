@@ -740,6 +740,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.21.0** | **Quality gate** — `ast-map check` fails CI when quality regresses: **baseline ratchet** vs `.ast-map.baseline.json` (cycles · dead exports · SDP · very-high complexity · score; `--update-baseline` re-anchors) + absolute thresholds (flags or config `"check"`). New MCP tool `check_quality_gate` (**28 tools**); GitHub Action gains `mode: check`. |
 | **1.20.0** | **Incremental cache + parallel parsing** — persistent content-hash parse cache in `.ast-map/cache` (on by default, never stale, warm hits ~60× faster on large files; `ast-map cache stats|clear`, `AST_MAP_NO_CACHE`, `"cache": false`) + worker-thread **parallel parsing** for bulk scans (auto-sized, `AST_MAP_WORKERS` override, sequential fallback). |
 | **1.19.0** | **Dashboard: coupling + SDP** — `ast-map report` / `get_codebase_report` now include **module coupling** (per-directory instability bars) and **layer violations** (stable→volatile, SDP) cards, plus an SDP stat; SDP inversions also factor into the health score. The v1.14–1.16 metrics are now visual. |
 | **1.18.0** | **Vue & Svelte SFC support** — `.vue` and `.svelte` single-file components are now parsed: the `<script>` / `<script setup>` block is lifted out (TS or JS) and its symbols + imports extracted, with cross-file graph edges into plain modules. Blank-padding keeps every symbol's line numbers pointing at the original SFC. **14 languages**. |

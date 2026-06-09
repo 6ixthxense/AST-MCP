@@ -1,6 +1,6 @@
 {
   "name": "universal-ast-mapper",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "description": "MCP server that maps source files into a normalized code skeleton (JSON + HTML) using tree-sitter.",
   "type": "module",
   "main": "dist/index.js",
@@ -19,7 +19,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "smoke": "node test/smoke.mjs",
-    "test": "node test/smoke.mjs && node test/analysis.mjs && node test/cache-smoke.mjs",
+    "test": "node test/smoke.mjs && node test/analysis.mjs && node test/cache-smoke.mjs && node test/check-smoke.mjs",
     "postinstall": "node scripts/install-skill.mjs"
   },
   "engines": {

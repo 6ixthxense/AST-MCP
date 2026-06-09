@@ -6,6 +6,17 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.21.0] — 2026-06-10 · Quality gate (`ast-map check`)
+- **`ast-map check [dir]`** — CI quality gate with two mechanisms: a **baseline ratchet**
+  (vs a committed `.ast-map.baseline.json`; fails when cycles, dead exports, SDP violations,
+  very-high-complexity functions rise or the health score drops; `--update-baseline`
+  re-anchors) and **absolute thresholds** (CLI flags or `.ast-map.config.json` → `"check"`).
+  Non-zero exit on failure; `--json` for tooling.
+- New MCP tool **`check_quality_gate`** (28 tools) — same gate for agents.
+- **GitHub Action**: `mode: validate | check | both` + `check-args` inputs.
+- New module `check` (`runQualityGate`, `metricsFromReport`); `AstMapConfig.check`.
+- Tests: new `test/check-smoke.mjs` (13 checks), wired into `npm test`.
+
 ## [1.20.0] — 2026-06-10 · Incremental cache + parallel parsing
 - **Persistent parse cache**: skeletons are cached on disk under `<root>/.ast-map/cache`,
   keyed by content hash + detail + schema/grammar versions — never stale by construction,

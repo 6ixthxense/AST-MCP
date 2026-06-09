@@ -20,6 +20,7 @@ import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { buildExplorerHtml } from "./explorer.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport, buildReportHtml } from "./report.js";
+import { runQualityGate, BASELINE_FILENAME, type CheckThresholds } from "./check.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
@@ -684,6 +685,80 @@ program
     const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
     console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max}`));
     console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
+    console.log();
+  });
+
+// ─── Command: check ───────────────────────────────────────────────────────────
+
+const num = (v: string) => Number.parseFloat(v);
+
+program
+  .command("check [dir]")
+  .description("CI quality gate: absolute thresholds + baseline ratchet (cycles, dead exports, SDP, complexity, score)")
+  .option("--baseline <file>", `Baseline file (default ${BASELINE_FILENAME})`)
+  .option("--update-baseline", "Write current metrics as the new baseline")
+  .option("--max-cycles <n>", "Fail when circular dependencies exceed n", num)
+  .option("--max-dead-exports <n>", "Fail when dead exports exceed n", num)
+  .option("--max-sdp-violations <n>", "Fail when SDP/layer violations exceed n", num)
+  .option("--max-very-high-complexity <n>", "Fail when functions with complexity > 20 exceed n", num)
+  .option("--max-complexity <n>", "Fail when any function's complexity exceeds n", num)
+  .option("--min-score <n>", "Fail when the health score drops below n", num)
+  .option("--json", "Output the gate result as JSON")
+  .action(async (dir: string | undefined, o: {
+    baseline?: string; updateBaseline?: boolean; json?: boolean;
+    maxCycles?: number; maxDeadExports?: number; maxSdpViolations?: number;
+    maxVeryHighComplexity?: number; maxComplexity?: number; minScore?: number;
+  }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const fromConfig = loadProjectConfig(ROOT).check ?? {};
+    const thresholds: CheckThresholds = {
+      maxCycles: o.maxCycles ?? fromConfig.maxCycles,
+      maxDeadExports: o.maxDeadExports ?? fromConfig.maxDeadExports,
+      maxSdpViolations: o.maxSdpViolations ?? fromConfig.maxSdpViolations,
+      maxVeryHighComplexity: o.maxVeryHighComplexity ?? fromConfig.maxVeryHighComplexity,
+      maxComplexity: o.maxComplexity ?? fromConfig.maxComplexity,
+      minScore: o.minScore ?? fromConfig.minScore,
+    };
+
+    const result = await runQualityGate(abs, ROOT, {
+      baselinePath: o.baseline,
+      thresholds,
+      updateBaseline: o.updateBaseline,
+    });
+
+    if (o.json) {
+      jsonOut(result);
+      if (!result.passed) process.exit(1);
+      return;
+    }
+
+    header(`Quality gate \u2014 ${rel}/`);
+    const m = result.metrics;
+    const b = result.baseline;
+    const delta = (key: keyof typeof m) =>
+      b ? dim(` (baseline ${String(b[key])})`) : "";
+    console.log(indent(`score ${bold(String(m.score))}/100 (${m.grade})${delta("score")}`));
+    console.log(indent(`cycles ${m.cycles}${delta("cycles")} · dead exports ${m.deadExports}${delta("deadExports")} · SDP ${m.sdpViolations}${delta("sdpViolations")}`));
+    console.log(indent(`complexity: max ${m.maxComplexity} · very-high (>20) ${m.veryHighComplexity}${delta("veryHighComplexity")}`));
+
+    if (result.baselineUpdated) {
+      console.log(indent(green("\u2713") + " baseline updated: " + path.relative(process.cwd(), result.baselinePath)));
+    } else if (!b) {
+      console.log(indent(dim(`no baseline (${path.relative(process.cwd(), result.baselinePath)}) \u2014 run with --update-baseline to create one`)));
+    }
+
+    if (result.failures.length > 0) {
+      console.log();
+      for (const f of result.failures) {
+        console.log(indent(red("\u2717") + ` [${f.kind}] ${f.message}`));
+      }
+      console.log();
+      console.log(indent(red(`gate FAILED \u2014 ${result.failures.length} violation(s)`)));
+      process.exit(1);
+    }
+    console.log(indent(green("\u2713 gate passed")));
     console.log();
   });
 

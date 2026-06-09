@@ -52,6 +52,15 @@ export interface AstMapConfig {
   outputDir?: string;
   /** Persistent parse cache in <root>/.ast-map/cache (default true). */
   cache?: boolean;
+  /** Quality-gate thresholds for `ast-map check` / check_quality_gate. */
+  check?: {
+    maxCycles?: number;
+    maxDeadExports?: number;
+    maxSdpViolations?: number;
+    maxVeryHighComplexity?: number;
+    maxComplexity?: number;
+    minScore?: number;
+  };
   /** Per-rule overrides for validate_architecture. */
   rules?: {
     "large-file"?: ValidationRuleConfig;
