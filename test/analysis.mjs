@@ -395,9 +395,13 @@ console.log("\n=== Symbol Search ===");
   check("language breakdown present", data.languages.length > 0 && data.languages[0].lang === "typescript");
   check("detects the cycle fixture", data.cycles.count >= 1);
   check("complexity hotspots sorted desc", data.complexity.hotspots.length === 0 || data.complexity.hotspots.every((h, i, a) => i === 0 || a[i-1].complexity >= h.complexity));
+  check("report includes layer-violation data", data.layerViolations && typeof data.layerViolations.count === "number");
+  check("report includes module coupling data", Array.isArray(data.modules));
   const html = buildReportHtml(data);
   check("report html self-contained", html.length > 1000 && !/src=["']https?:/.test(html));
   check("report html shows the grade badge", html.includes(">" + data.grade + "<"));
+  check("report html renders the module coupling card", html.includes("Module coupling"));
+  check("report html renders the SDP card", html.includes("Layer violations"));
 }
 
 // ─── Git Diff & Risk ──────────────────────────────────────────────────────────

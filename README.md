@@ -368,7 +368,7 @@ Given a compiled JS/CSS file with an inline (`data:`) or external `sourceMapping
 ---
 
 ### `get_codebase_report`
-A one-shot **codebase health summary**: file/symbol counts, language breakdown, a health **grade (A–F)** + score, complexity hotspots, god nodes, dead exports, and circular dependencies. Rendered as a premium HTML dashboard by `ast-map report`.
+A one-shot **codebase health summary**: file/symbol counts, language breakdown, a health **grade (A–F)** + score, complexity hotspots, god nodes, dead exports, circular dependencies, **module coupling** (per-directory instability), and **layer violations** (SDP). Rendered as a premium HTML dashboard by `ast-map report`.
 
 ```json
 { "grade": "B", "score": 82, "fileCount": 120, "symbolCount": 1400,
@@ -740,6 +740,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.19.0** | **Dashboard: coupling + SDP** — `ast-map report` / `get_codebase_report` now include **module coupling** (per-directory instability bars) and **layer violations** (stable→volatile, SDP) cards, plus an SDP stat; SDP inversions also factor into the health score. The v1.14–1.16 metrics are now visual. |
 | **1.18.0** | **Vue & Svelte SFC support** — `.vue` and `.svelte` single-file components are now parsed: the `<script>` / `<script setup>` block is lifted out (TS or JS) and its symbols + imports extracted, with cross-file graph edges into plain modules. Blank-padding keeps every symbol's line numbers pointing at the original SFC. **14 languages**. |
 | **1.17.0** | **MCP prompts** — the server now registers 5 parameterized **prompts** (`architecture_audit`, `safe_refactor`, `dead_code_cleanup`, `health_check`, `onboard_codebase`): named workflows a client can invoke from its prompt menu, each chaining the right tools. The Cookbook recipes, one call away. |
 | **1.16.0** | **Module coupling** — new `get_module_coupling` MCP tool + `ast-map modules` (alias `mods`) CLI: aggregates the import graph to the **directory/module level** — per-module Ca / Ce / instability plus weighted inter-module edges (intra-module imports ignored). The bird's-eye view above per-file coupling. **27 MCP tools**. |

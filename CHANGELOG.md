@@ -6,6 +6,17 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.19.0] — 2026-06-09 · Dashboard: coupling + SDP
+- The health dashboard (`ast-map report` / `get_codebase_report`) now surfaces the
+  v1.14–1.16 architecture metrics: a **Module coupling** card (per-directory instability
+  bars with Ca/Ce) and a **Layer violations** card (stable→volatile SDP inversions),
+  plus an **SDP violations** stat tile.
+- SDP violations now factor into the health score (small capped penalty), so a codebase
+  that systematically depends "uphill" on the stability gradient scores lower.
+- `ReportData` gains `layerViolations` and `modules`; purely additive.
+- Tests: 4 new assertions (131 total) — report carries the new data and the HTML renders
+  both cards.
+
 ## [1.18.0] — 2026-06-09 · Vue & Svelte SFC support
 - `.vue` and `.svelte` **single-file components** are now first-class inputs. The
   `<script>` / `<script setup>` block is lifted out and parsed with the TS/JS extractor

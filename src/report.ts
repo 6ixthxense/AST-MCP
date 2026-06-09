@@ -4,6 +4,8 @@ import { resolveOptions } from "./config.js";
 import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getTopSymbols } from "./graph-analysis.js";
 import { computeFileComplexity, type FunctionComplexity } from "./complexity.js";
+import { findLayerViolations, type LayerViolation } from "./layers.js";
+import { computeModuleCoupling, type ModuleMetric } from "./modulecoupling.js";
 import type { SkeletonFile } from "./types.js";
 
 export interface ReportData {
@@ -19,6 +21,8 @@ export interface ReportData {
   cycles: { count: number; items: string[][] };
   godNodes: { symbol: string; file: string; importCount: number }[];
   complexity: { average: number; max: number; hotspots: (FunctionComplexity & { file: string })[] };
+  layerViolations: { count: number; items: LayerViolation[] };
+  modules: ModuleMetric[];
 }
 
 function gradeFor(score: number): string {
@@ -59,6 +63,8 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   const dead = findDeadExports(graph).filter((d) => d.confidence === "high");
   const cycles = findCircularDeps(graph);
   const god = getTopSymbols(graph, 8);
+  const layerViolations = findLayerViolations(graph);
+  const modules = computeModuleCoupling(graph).modules;
 
   hotspots.sort((a, b) => b.complexity - a.complexity);
   const veryHigh = hotspots.filter((f) => f.complexity > 20).length;
@@ -70,6 +76,7 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   score -= Math.min(22, cycles.length * 6);
   score -= Math.min(28, veryHigh * 4 + high * 1);
   score -= Math.min(12, god.filter((g) => g.importCount >= 8).length * 4);
+  score -= Math.min(10, layerViolations.length);
   score = Math.max(0, Math.round(score));
 
   const languages = [...langCount.entries()]
@@ -89,6 +96,8 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
     cycles: { count: cycles.length, items: cycles.slice(0, 12).map((c) => c.cycle) },
     godNodes: god.map((g) => ({ symbol: g.symbol, file: g.file, importCount: g.importCount })),
     complexity: { average: cxN ? Math.round((cxSum / cxN) * 10) / 10 : 0, max: cxMax, hotspots: hotspots.slice(0, 12) },
+    layerViolations: { count: layerViolations.length, items: layerViolations.slice(0, 12) },
+    modules: modules.slice(0, 10),
   };
 }
 
@@ -104,6 +113,10 @@ function esc(s: string): string {
 
 function ratingColor(r: string): string {
   return r === "very-high" ? "#e24b4a" : r === "high" ? "#d85a30" : r === "moderate" ? "#ba7517" : "#1d9e75";
+}
+
+function instColor(i: number): string {
+  return i >= 0.8 ? "#e24b4a" : i <= 0.2 ? "#1d9e75" : "#ba7517";
 }
 
 function statCard(label: string, value: string | number, accent?: string): string {
@@ -134,6 +147,13 @@ export function buildReportHtml(d: ReportData): string {
   const cycles = d.cycles.count
     ? d.cycles.items.map((c) => `<div class="li"><span class="mono">${esc(c.join("  →  "))}</span></div>`).join("")
     : `<div class="ok">✓ No circular dependencies</div>`;
+  const modules = d.modules.length
+    ? d.modules.map((m) => bar(`${m.module}  ·  ${m.files} file(s)`, m.instability, 1, instColor(m.instability), `Ca ${m.afferent} · Ce ${m.efferent} · <b>I ${m.instability.toFixed(2)}</b>`)).join("")
+    : `<div class="empty">No cross-module imports.</div>`;
+  const sdp = d.layerViolations.count
+    ? d.layerViolations.items.map((v) => `<div class="li"><span class="mono">${esc(v.from)}</span><span class="dim">→ ${esc(v.to)}</span><span class="pill" style="color:${instColor(0.9)}">+${v.severity.toFixed(2)}</span></div>`).join("")
+      + (d.layerViolations.count > d.layerViolations.items.length ? `<div class="more">+${d.layerViolations.count - d.layerViolations.items.length} more…</div>` : "")
+    : `<div class="ok">✓ No stability inversions (SDP)</div>`;
 
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(d.project)} — code health</title><style>
@@ -175,12 +195,17 @@ export function buildReportHtml(d: ReportData): string {
   ${statCard("Max complexity", d.complexity.max, ratingColor(d.complexity.max > 20 ? "very-high" : d.complexity.max > 10 ? "high" : "low"))}
   ${statCard("Dead exports", d.dead.count, d.dead.count ? "#d85a30" : "#1d9e75")}
   ${statCard("Cycles", d.cycles.count, d.cycles.count ? "#e24b4a" : "#1d9e75")}
+  ${statCard("SDP violations", d.layerViolations.count, d.layerViolations.count ? "#d85a30" : "#1d9e75")}
 </div>
 <div class="card"><h2>Language breakdown</h2>${langs}</div>
 <div class="card"><h2>Complexity hotspots</h2>${hotspots}</div>
 <div class="two">
   <div class="card"><h2>God nodes (most imported)</h2>${god}</div>
   <div class="card"><h2>Circular dependencies</h2>${cycles}</div>
+</div>
+<div class="two">
+  <div class="card"><h2>Module coupling (instability)</h2>${modules}</div>
+  <div class="card"><h2>Layer violations (stable → volatile)</h2>${sdp}</div>
 </div>
 <div class="card"><h2>Dead exports (high confidence)</h2>${dead}</div>
 <div class="foot">Generated by AST-MCP · universal-ast-mapper</div>
