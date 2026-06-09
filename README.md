@@ -4,20 +4,20 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**27 MCP tools / 28 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
+**28 MCP tools / 30 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
-| Capability               | TS/JS | Python | Go  | Rust | Java | C#  | C   | C++ | Kt  | Swift |
-|--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|
-| Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
-| Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
-| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
-| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    |
-| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
-| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
+| Capability               | TS/JS | Python | Go  | Rust | Java | C#  | C   | C++ | Kt  | Swift | PHP | Ruby |
+|--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|:---:|:----:|
+| Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | ✅  | ✅   |
+| Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | ✅  | ✅   |
+| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | —   | —    |
+| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | —   | —    |
+| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     | —   | —    |
+| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     | —   | —    |
 
-> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. (Ruby was unblocked in v1.22.0 by upgrading `web-tree-sitter` to 0.21.0.)
+> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. (PHP & Ruby landed in v1.22.0 — symbol extraction + imports; cross-file graph wiring for them is the next step. Ruby was unblocked by upgrading `web-tree-sitter` to 0.21.0.)
 
 Each language uses the resolution strategy that fits it:
 - **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting.
@@ -110,6 +110,8 @@ ast-map pack      <file> [symbol]  [--scan <d>] # minimal context pack
 ast-map coupling  [dir]            [-n N]        # Ca / Ce / instability per file
 ast-map layers    [dir]            [-g gap]      # SDP: stable→volatile violations
 ast-map modules   [dir]                          # directory-level coupling + edges
+ast-map cache     [stats|clear]                  # persistent parse cache (.ast-map/cache)
+ast-map check     [dir]            [--update-baseline] [--min-score N] [--max-cycles N] ...
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -524,6 +526,13 @@ Thresholds can be set per-call or in `.ast-map.config.json`.
 
 ---
 
+### `check_quality_gate`
+Run the CI quality gate: **absolute thresholds** (from `.ast-map.config.json` → `"check"`) plus a **baseline ratchet** against `.ast-map.baseline.json` — fails when cycles, dead exports, SDP violations, very-high-complexity functions rise, or the health score drops. Set `updateBaseline` to re-anchor at the current metrics. Same engine as `ast-map check`.
+
+**Params:** `path`, `baseline`, `updateBaseline`
+
+---
+
 ### `get_top_symbols`
 Return the N most-imported symbols — your codebase's "God Nodes" where a breaking change has maximum blast radius.
 
@@ -540,15 +549,41 @@ Place in your project root. All fields optional.
   "ignore": ["dist", "coverage", ".turbo"],
   "maxFileBytes": 500000,
   "outputDir": ".ast-map",
+  "cache": true,
   "rules": {
     "large-file":       { "maxLines": 400 },
     "too-many-imports": { "maxImports": 20 },
     "god-export":       { "maxExports": 15 }
+  },
+  "check": {
+    "maxCycles": 0,
+    "maxSdpViolations": 10,
+    "minScore": 70
   }
 }
 ```
 
+- `cache` — persistent parse cache in `<root>/.ast-map/cache` (default `true`; also disabled by `AST_MAP_NO_CACHE=1`). Inspect/clear with `ast-map cache [stats|clear]`.
+- `check` — default thresholds for `ast-map check` / `check_quality_gate`; CLI flags override per run.
+
 The config is read live — changes take effect on the next call without restarting the MCP server.
+
+---
+
+## Performance — cache & parallel parsing
+
+Since **v1.20.0**, bulk scans are fast twice over:
+
+- **Persistent parse cache** — every parsed file's skeleton is stored under `<root>/.ast-map/cache`, keyed by a SHA-1 of its content + detail + schema/grammar versions. A changed file hashes to a new key, so entries are **never stale by construction**, and the cache survives across processes — a re-run on an unchanged repo skips parsing entirely (warm hits on large files ≈ 60× faster).
+- **Worker-thread parallel parsing** — batches of ≥ 64 files are distributed over a pool sized from your CPU count (max 8); smaller batches stay sequential so there's no startup-cost penalty. Any worker failure falls back to sequential parsing.
+
+| Env var | Effect |
+|---------|--------|
+| `AST_MAP_NO_CACHE=1` | disable the disk cache for this run |
+| `AST_MAP_WORKERS=0`  | force sequential parsing |
+| `AST_MAP_WORKERS=N`  | force a pool of N workers (bypasses the batch-size gate) |
+
+`ast-map cache` shows entry count + size; `ast-map cache clear` wipes it. `.ast-map/` is already in the default ignore list — add it to `.gitignore` if it isn't.
 
 ---
 
@@ -712,7 +747,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - uses: 6ixthxense/AST-MCP@v1.0.0
+      - uses: 6ixthxense/AST-MCP@v1
         with:
           path: src
           max-lines: "400"
@@ -720,7 +755,19 @@ jobs:
           max-exports: "15"
 ```
 
-The action runs `ast-map validate` and fails the job on threshold violations. You can also call any CLI command directly with `npx -p universal-ast-mapper ast-map <command>`.
+The action runs `ast-map validate` and fails the job on threshold violations.
+
+Since **v1.21.0** the action can also run the **quality gate** (baseline ratchet + thresholds). Commit a baseline once (`ast-map check src --update-baseline`), then:
+
+```yaml
+      - uses: 6ixthxense/AST-MCP@v1
+        with:
+          path: src
+          mode: check                 # validate | check | both
+          check-args: "--min-score 70 --max-cycles 0"
+```
+
+The job fails whenever cycles, dead exports, SDP violations, or complexity regress past the committed `.ast-map.baseline.json`. You can also call any CLI command directly with `npx -p universal-ast-mapper ast-map <command>`.
 
 ---
 
