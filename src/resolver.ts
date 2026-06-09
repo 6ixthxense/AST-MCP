@@ -21,7 +21,7 @@ export interface ResolvedImport extends ImportRef {
   importKind: "relative" | "external";
 }
 
-const SRC_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+const SRC_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs", ".vue", ".svelte"];
 
 function extractParams(sig: string): string | null {
   const start = sig.indexOf("(");

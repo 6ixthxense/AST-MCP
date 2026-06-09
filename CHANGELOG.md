@@ -6,6 +6,47 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.18.0] — 2026-06-09 · Vue & Svelte SFC support
+- `.vue` and `.svelte` **single-file components** are now first-class inputs. The
+  `<script>` / `<script setup>` block is lifted out and parsed with the TS/JS extractor
+  (grammar chosen from `lang="ts"`), so component symbols and imports are extracted and
+  wired into the dependency graph — including edges from a component into a plain `.ts`
+  module, and into other components.
+- Offsets are preserved: everything outside the script is blank-padded, so every symbol
+  range still points at the exact line/column in the original SFC.
+- New languages `vue` and `svelte` (extensions `.vue`, `.svelte`); resolver now resolves
+  imports of `.vue` / `.svelte` files. **14 languages.**
+- Tests: 8 new assertions (127 total) + Vue/Svelte fixtures — symbol extraction, import
+  capture, and cross-file graph edges for both.
+
+## [1.17.0] — 2026-06-09 · MCP prompts
+- The server now registers **MCP prompts** — named, parameterized workflows a client
+  can invoke from its prompt/slash menu, each returning a ready-to-run instruction that
+  chains the right tools: `architecture_audit` (dir?), `safe_refactor` (file, symbol),
+  `dead_code_cleanup` (dir?), `health_check` (dir?), `onboard_codebase` (dir?).
+- The Cookbook recipes become first-class, discoverable, and one call away — no pasting.
+- New `test/prompts-smoke.mjs` (12 checks): `prompts/list` returns all 5, argument
+  interpolation works, and rendered prompts reference real tools. Wired into CI.
+
+## [1.16.0] — 2026-06-09 · Module coupling
+- **`get_module_coupling`** + **`ast-map modules`** (alias `mods`): aggregates the
+  file-level import graph up to the **directory/module level** — per-module afferent
+  (Ca) / efferent (Ce) coupling and instability, plus the weighted inter-module edges.
+  Intra-module imports (files importing siblings in the same directory) are ignored;
+  only cross-module dependencies count. The architectural view above per-file coupling.
+- Tests: 5 new assertions (119 total) — a three-module ui→api→core gradient with the
+  expected stability ordering and edge count.
+
+## [1.15.0] — 2026-06-09 · Layer-violation detection
+- **`get_layer_violations`** + **`ast-map layers`** (alias `sdp`): detect violations of
+  Robert C. Martin's **Stable Dependencies Principle** — a stable file (low instability)
+  that imports a more volatile one (high instability). Such dependencies point "uphill"
+  on the stability gradient and drag stable code along every time the volatile file churns.
+  Sorted by severity (the instability gap crossed). `minGap` filters small gaps.
+- Builds directly on the v1.14.0 coupling metrics.
+- Tests: 5 new assertions (114 total) — clean fixture yields none, a synthetic
+  stable→volatile graph yields exactly one with the correct severity.
+
 ## [1.14.0] — 2026-06-09 · Coupling metrics
 - **`get_coupling`** + **`ast-map coupling [dir]`**: Robert C. Martin's per-file
   coupling metrics — afferent coupling (Ca, fan-in), efferent coupling (Ce,
@@ -111,36 +152,4 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
   declared in 2+ files.
 
 ## [0.8.3] — 2026-05-31 · TSX/React component props
-- Component symbols carry `propsType` + `props[]`; detects `React.FC<P>` and
-  JSX-returning PascalCase functions. MCP server version now read from package.json.
-
-## [0.8.2] — 2026-05-30 · Swift cross-file wiring
-- `import <Module>` → that module's files (`Sources/<Module>/`). Completes
-  cross-file graph/resolver support for all four v0.8.0 languages.
-
-## [0.8.1] — 2026-05-30 · Kotlin + C/C++ cross-file wiring
-- Kotlin FQCN/package index; C/C++ `#include` resolution with header↔impl pairing.
-- Fixes: parse-cache rel-path leak; Kotlin call-graph extraction.
-
----
-
-## Earlier (pre-session history)
-
-- **0.8.0** — +4 languages: C · C++ · Kotlin · Swift (symbol extraction + imports).
-- **0.7.0** — Go full module resolution; C# reverse `calledBy`; 4-suite test harness.
-- **0.6.0** — +3 languages: Rust · Java · C#; cross-language resolver.
-- **0.5.x** — `/ast-map` skill auto-install; iterative DFS; barrel re-exports; parse cache; call-graph aliases; `.ast-map.config.json`.
-- **0.4.0** — `search_symbol`, `get_file_deps`, `get_top_symbols`, dead-code tiers.
-- **0.3.0** — CLI; `find_dead_code`, `find_circular_deps`, `get_change_impact`, `get_call_graph`.
-- **0.2.0** — import extraction; `resolve_imports`; `build_symbol_graph`.
-- **0.1.0** — `get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture`.
-
-[1.13.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.13.0
-[1.12.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.12.0
-[1.11.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.11.0
-[1.10.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.10.0
-[1.9.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.9.0
-[1.8.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.8.0
-[1.7.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.7.0
-[1.6.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.6.0
-[1.5.0]: https://github.com/6ixthxense/AST-MCP/relea
+- Component s

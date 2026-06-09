@@ -18,6 +18,8 @@ export interface LanguageEntry {
   extract: (root: TSNode, source: string) => SymbolNode[];
   extractDirectives?: (root: TSNode, source: string) => string[];
   extractImports?: (root: TSNode, source: string) => ImportRef[];
+  /** Single-file component: lift the <script> block before parsing (Vue/Svelte). */
+  sfc?: boolean;
 }
 
 const TS_ENTRY = (language: string, grammar: string): LanguageEntry => ({
@@ -26,6 +28,15 @@ const TS_ENTRY = (language: string, grammar: string): LanguageEntry => ({
   extract: extractTypeScript,
   extractDirectives: extractDirectivesTS,
   extractImports: extractImportsTS,
+});
+
+const SFC_ENTRY = (language: string): LanguageEntry => ({
+  language,
+  grammar: "typescript", // overridden per-file after detecting lang="ts" vs js
+  extract: extractTypeScript,
+  extractDirectives: extractDirectivesTS,
+  extractImports: extractImportsTS,
+  sfc: true,
 });
 
 const BY_EXT: Record<string, LanguageEntry> = {
@@ -66,6 +77,8 @@ const BY_EXT: Record<string, LanguageEntry> = {
     extract: extractKotlin, extractDirectives: extractDirectivesKotlin, extractImports: extractImportsKotlin,
   },
   ".swift": { language: "swift", grammar: "swift", extract: extractSwift, extractImports: extractImportsSwift },
+  ".vue": SFC_ENTRY("vue"),
+  ".svelte": SFC_ENTRY("svelte"),
 };
 
 export function detectLanguage(filePath: string): LanguageEntry | null {

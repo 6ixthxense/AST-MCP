@@ -80,7 +80,9 @@ function isPathBasedLanguage(language: string): boolean {
     language === "typescript" ||
     language === "tsx" ||
     language === "javascript" ||
-    language === "python"
+    language === "python" ||
+    language === "vue" ||
+    language === "svelte"
   );
 }
 

@@ -5,6 +5,7 @@ import type { SkeletonOptions } from "./config.js";
 import { detectLanguage, supportedExtensions } from "./registry.js";
 import { parseSource } from "./parser.js";
 import { countSymbols, toOutline } from "./extractors/common.js";
+import { extractScript } from "./sfc.js";
 
 export const SCHEMA_VERSION = "1.1";
 export const GRAMMAR_SOURCE = "tree-sitter-wasms@0.1.13";
@@ -71,8 +72,14 @@ export async function buildSkeleton(
     return cached.file === wantFile ? cached : { ...cached, file: wantFile };
   }
 
-  const source = fs.readFileSync(absPath, "utf8");
-  const root = await parseSource(entry.grammar, source);
+  let source = fs.readFileSync(absPath, "utf8");
+  let grammar = entry.grammar;
+  if (entry.sfc) {
+    const script = extractScript(source);
+    source = script.code; // blank-padded script-only source (offsets preserved)
+    grammar = script.grammar;
+  }
+  const root = await parseSource(grammar, source);
   let symbols = entry.extract(root, source);
   if (opts.detail === "outline") symbols = toOutline(symbols);
 
@@ -84,7 +91,7 @@ export async function buildSkeleton(
     file: relPath.split(path.sep).join("/"),
     language: entry.language,
     generatedAt: new Date().toISOString(),
-    parser: { engine: "tree-sitter", grammar: `${entry.grammar} (${GRAMMAR_SOURCE})` },
+    parser: { engine: "tree-sitter", grammar: `${grammar} (${GRAMMAR_SOURCE})` },
     symbolCount: countSymbols(symbols),
     ...(directives.length > 0 ? { directives } : {}),
     ...(imports.length > 0 ? { imports } : {}),

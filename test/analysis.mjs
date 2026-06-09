@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const GRAPH_DIR = path.join(__dirname, "fixtures", "graph");
+const SFC_DIR = path.join(__dirname, "fixtures", "sfc");
 
 // ─── Bootstrap tree-sitter (same as smoke.mjs) ──────────────────────────────
 
@@ -494,6 +495,25 @@ console.log("\n=== Symbol Search ===");
   check("ui module is unstable (I=1)", by["ui"]?.instability === 1 && by["ui"]?.afferent === 0);
   check("two inter-module edges, intra-module ignored", mc.edges.length === 2);
   check("edge ui -> api exists", mc.edges.some((e) => e.from === "ui" && e.to === "api"));
+}
+
+// ─── Vue / Svelte single-file components ──────────────────────────────────────
+{
+  console.log("\n=== Vue / Svelte SFC ===");
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const vue = await buildSkeleton(path.join(SFC_DIR, "Counter.vue"), "Counter.vue", opts);
+  check("Vue SFC detected as language 'vue'", vue.language === "vue");
+  check("Vue script symbols extracted (interface + function)", vue.symbols.some((s) => s.name === "Props") && vue.symbols.some((s) => s.name === "increment"));
+  check("Vue imports captured from <script setup>", (vue.imports ?? []).some((i) => i.symbol === "formatLabel" && i.from === "./helpers"));
+  const sv = await buildSkeleton(path.join(SFC_DIR, "Widget.svelte"), "Widget.svelte", opts);
+  check("Svelte SFC detected as language 'svelte'", sv.language === "svelte");
+  check("Svelte script symbols extracted", sv.symbols.some((s) => s.name === "toggle"));
+  check("Svelte imports captured", (sv.imports ?? []).some((i) => i.from === "./helpers"));
+  // Cross-file graph edges from SFCs into a plain .ts module.
+  const g = await buildGraph(SFC_DIR);
+  const imp = g.edges.filter((e) => e.edgeType === "imports").map((e) => e.from + "->" + e.to);
+  check("Vue component wires an import edge to helpers.ts", imp.some((e) => e.includes("Counter.vue->") && e.includes("helpers.ts")));
+  check("Svelte component wires an import edge to helpers.ts", imp.some((e) => e.includes("Widget.svelte->") && e.includes("helpers.ts")));
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

@@ -4,9 +4,9 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**25 MCP tools / 26 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
+**27 MCP tools / 28 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
 
-**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift
+**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · **Vue** · **Svelte** (SFC `<script>`)
 
 | Capability               | TS/JS | Python | Go  | Rust | Java | C#  | C   | C++ | Kt  | Swift |
 |--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|
@@ -108,6 +108,8 @@ ast-map diff      [base]           [--dir <d>]   # git-aware changed symbols + i
 ast-map risk      [dir]            [-n N]        # churn × complexity
 ast-map pack      <file> [symbol]  [--scan <d>] # minimal context pack
 ast-map coupling  [dir]            [-n N]        # Ca / Ce / instability per file
+ast-map layers    [dir]            [-g gap]      # SDP: stable→volatile violations
+ast-map modules   [dir]                          # directory-level coupling + edges
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -426,6 +428,31 @@ Per-file **coupling metrics** (Robert C. Martin): afferent coupling **Ca** (fan-
 
 ---
 
+### `get_layer_violations`
+Find dependencies that point **the wrong way on the stability gradient** — a stable file (low instability) importing a more volatile one (high instability), violating Martin's **Stable Dependencies Principle**. Sorted by severity (the instability gap crossed).
+
+```json
+{ "violations": [ { "from": "src/skeleton.ts", "to": "src/registry.ts", "fromInstability": 0.36, "toInstability": 0.6, "severity": 0.24 } ] }
+```
+
+**Params:** `path` (optional), `minGap` (optional, 0–1)
+
+---
+
+### `get_module_coupling`
+Aggregate the import graph up to the **directory/module level** — per-module Ca / Ce / instability plus the weighted inter-module edges. Intra-module imports are ignored, so this is the architectural bird's-eye view above per-file coupling.
+
+```json
+{
+  "modules": [ { "module": "src/extractors", "files": 11, "afferent": 1, "efferent": 1, "instability": 0.5 } ],
+  "edges": [ { "from": "src/extractors", "to": "src", "weight": 75 } ]
+}
+```
+
+**Params:** `path` (optional)
+
+---
+
 ### `get_change_impact`
 Given a file + symbol, reverse-traverse the import graph to compute **blast radius**.
 
@@ -656,6 +683,20 @@ Beyond tools, the server exposes the codebase as **browseable MCP resources**, s
 
 ---
 
+## MCP prompts — one-call recipes
+
+The server also registers **prompts**: named, parameterized workflows an MCP client can invoke directly (they show up in the client's prompt/slash menu). Each returns a ready-to-run instruction that chains the right tools, so you don't paste the recipe by hand.
+
+| Prompt | Args | What it does |
+|--------|------|--------------|
+| `architecture_audit` | `dir?` | God Nodes → cycles → rule violations → module coupling → SDP breaks, then a prioritized summary |
+| `safe_refactor` | `file`, `symbol` | blast radius → call graph → minimal context before changing a symbol |
+| `dead_code_cleanup` | `dir?` | unused exports, each verified zero-impact before deletion |
+| `health_check` | `dir?` | grade A–F → risk map → layer violations, with the 3 files to fix first |
+| `onboard_codebase` | `dir?` | languages → structure → core symbols → module map, as a "start here" guide |
+
+---
+
 ## GitHub Action — architecture gate in CI
 
 Use AST-MCP as a CI check with the bundled composite action (`action.yml`):
@@ -699,6 +740,10 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.18.0** | **Vue & Svelte SFC support** — `.vue` and `.svelte` single-file components are now parsed: the `<script>` / `<script setup>` block is lifted out (TS or JS) and its symbols + imports extracted, with cross-file graph edges into plain modules. Blank-padding keeps every symbol's line numbers pointing at the original SFC. **14 languages**. |
+| **1.17.0** | **MCP prompts** — the server now registers 5 parameterized **prompts** (`architecture_audit`, `safe_refactor`, `dead_code_cleanup`, `health_check`, `onboard_codebase`): named workflows a client can invoke from its prompt menu, each chaining the right tools. The Cookbook recipes, one call away. |
+| **1.16.0** | **Module coupling** — new `get_module_coupling` MCP tool + `ast-map modules` (alias `mods`) CLI: aggregates the import graph to the **directory/module level** — per-module Ca / Ce / instability plus weighted inter-module edges (intra-module imports ignored). The bird's-eye view above per-file coupling. **27 MCP tools**. |
+| **1.15.0** | **Layer-violation detection** — new `get_layer_violations` MCP tool + `ast-map layers` (alias `sdp`) CLI: flags dependencies that break Martin's **Stable Dependencies Principle** — a stable file (low instability) importing a more volatile one — sorted by the instability gap. Builds directly on the coupling metrics. **26 MCP tools**. |
 | **1.14.0** | **Coupling metrics** — new `get_coupling` MCP tool + `ast-map coupling [dir]` CLI: per-file afferent (Ca) / efferent (Ce) coupling and **instability** I = Ce/(Ca+Ce), the way to spot load-bearing files (high Ca) vs. volatile ones (high I). **25 MCP tools**. |
 | **1.13.0** | **Context-pack** — new `pack_context` MCP tool + `ast-map pack <file> [symbol]` CLI: the minimal context to work on a symbol (its source + the signatures it depends on + its dependents) with a token estimate, instead of reading whole files. **24 MCP tools**. |
 | **1.12.0** | **Git-aware analysis** — `ast-map diff [base]` + `get_diff` tool: changed symbols since a ref, **breaking changes** (removed / signature-changed exports), and blast radius. `ast-map risk` + `get_risk_map` tool: rank files by churn × complexity. Brings a time/history dimension. **23 MCP tools**. |
@@ -722,14 +767,4 @@ Not part of the public API: the internal `src/` module layout and the generated 
 | **0.9.0** | **Scoped type-flow tracing** — new `trace_type` MCP tool + `ast-map trace-type` (alias `flow`) CLI: follow a named type through function params, return types, typed variables, and class fields across a directory. Completes the deeper-analysis suite (dead code · cycles · impact · complexity · duplicates · unused params · type flow). **18 MCP tools**. |
 | **0.8.7** | **Python decorators in the call graph** — function/method symbols now carry a `decorators` field (`@router.get("/x")` → `router.get("/x")`), surfaced in skeletons (outline + full) and in `get_call_graph`. Traces framework wiring like FastAPI/Flask routes and `@staticmethod`/`@property` stacks to their handler. |
 | **0.8.6** | **Unused parameter detection** — new `find_unused_params` MCP tool + `ast-map unused-params` (alias `unused`) CLI: named functions whose params are never referenced. Skips `_`-prefixed/destructured/anonymous and treats object-shorthand as a use (low false-positive). Server now 17 tools. |
-| **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complexity` (alias `cx`, `--min N`) CLI: per-function AST-based complexity score (`1 + if/for/while/case/catch/ternary/&&/\|\|`) with low/moderate/high/very-high ratings and directory hotspots. Server now 16 tools. |
-| **0.8.4** | **Duplicate symbol detection** — new `find_duplicate_symbols` MCP tool + `ast-map duplicates` (alias `dupes`) CLI command: finds symbol names exported from more than one file, with every file/kind that declares each name. |
-| **0.8.3** | **TSX/React component props** — component symbols now carry extracted prop fields. PascalCase functions/arrows that return JSX or are typed `React.FC<P>`/`FC<P>` get `propsType` (named props type) + `props[]` (name, type, optional), resolved from same-file `interface`/`type` declarations or inline object types. Plus: MCP server now reports its real version from `package.json` (was hardcoded `0.5.3`). |
-| **0.8.2** | **Swift cross-file wiring** — `import <Module>` resolves to that module's files (module = the `Sources/<Module>/` directory, else parent dir), wired into `build_symbol_graph` + `resolve_imports`. System modules (Foundation, UIKit, …) stay external. Completes cross-file graph/resolver support for all four v0.8.0 languages. |
-| **0.8.1** | **Cross-file graph wiring for Kotlin & C/C++** — Kotlin FQCN/package index + C/C++ `#include` resolution (with header↔impl pairing) wired into `build_symbol_graph`, `resolve_imports`, and `get_call_graph`. Fixes a parse-cache rel-path leak (stale `.file` poisoned the cross-lang index → doubled paths) and Kotlin call-graph extraction (`function_declaration` name + field-less `call_expression`). |
-| **0.8.0** | **4 new languages: C · C++ · Kotlin · Swift** — symbol extraction + imports parsing. C++ tracks access_specifier through class bodies. Kotlin handles `package`/`object`/`data class`. Swift handles `class`/`struct`/`enum` (all under `class_declaration`) and `protocol_declaration`. Ruby grammar in tree-sitter-wasms@0.1.13 is unstable — skipped. |
-| **0.7.0** | Go full resolution (reads `go.mod`, resolves package-as-directory) · C# reverse `calledBy` via call-site scanning · `csharpTypes` index lets `using` directives resolve to specific types · 4-suite test harness (smoke + graph-smoke + resolver-smoke + callgraph-smoke) |
-| **0.6.0** | **3 new languages: Rust · Java · C#** (extractors + import parsing) · cross-language resolver in `crosslang.ts` (Java FQCN index, C# namespace index, Rust `crate::` module walk) · symbol-graph `imports` edges + `resolveFileImports` enrichment + `get_call_graph` callee resolution rewired through it · Java `package` and C# `namespace` captured as directives |
-| **0.5.3** | Auto-install `/ast-map` Claude Code skill on `npm install` · `postinstall` writes `~/.claude/skills/ast-map/SKILL.md` + registers trigger in `CLAUDE.md` (idempotent, CI-safe) |
-| **0.5.2** | Iterative DFS in `findCircularDeps` (eliminates stack overflow on large codebases) · `build_symbol_graph` inline size guard (>2000 nodes → stats + warning) · integration test suite (`test/analysis.mjs`) |
-| **0.5.1** | Re-export tracking (`export { X } from './foo'`, barrel files
+| **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complex
