@@ -6,6 +6,17 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.22.0] — 2026-06-10 · PHP & Ruby support
+- **PHP** (`.php`): classes/interfaces/traits/enums, methods with visibility modifiers,
+  class consts + properties, namespaces; imports from `use` (incl. grouped `use A\{B, C}`
+  and aliases) and `require`/`include` (side-effect).
+- **Ruby** (`.rb`, `.rake`): classes, modules (→ namespace), methods, `self.` singleton
+  methods, constants; **section-style visibility** (`private`/`protected`/`public`);
+  imports from `require` / `require_relative`.
+- **web-tree-sitter 0.20.8 → 0.21.0** — unblocks the Ruby grammar (external-scanner
+  crash on the old runtime); no API change, all grammars + suites re-verified.
+- Tests: `Sample.php` + `sample.rb` fixtures, 30 new smoke assertions. **16 languages.**
+
 ## [1.21.0] — 2026-06-10 · Quality gate (`ast-map check`)
 - **`ast-map check [dir]`** — CI quality gate with two mechanisms: a **baseline ratchet**
   (vs a committed `.ast-map.baseline.json`; fails when cycles, dead exports, SDP violations,

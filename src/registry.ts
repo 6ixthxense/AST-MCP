@@ -11,6 +11,8 @@ import { extractC, extractImportsC } from "./extractors/c.js";
 import { extractCpp, extractImportsCpp } from "./extractors/cpp.js";
 import { extractKotlin, extractDirectivesKotlin, extractImportsKotlin } from "./extractors/kotlin.js";
 import { extractSwift, extractImportsSwift } from "./extractors/swift.js";
+import { extractPhp, extractImportsPhp } from "./extractors/php.js";
+import { extractRuby, extractImportsRuby } from "./extractors/ruby.js";
 
 export interface LanguageEntry {
   language: string;
@@ -77,6 +79,9 @@ const BY_EXT: Record<string, LanguageEntry> = {
     extract: extractKotlin, extractDirectives: extractDirectivesKotlin, extractImports: extractImportsKotlin,
   },
   ".swift": { language: "swift", grammar: "swift", extract: extractSwift, extractImports: extractImportsSwift },
+  ".php": { language: "php", grammar: "php", extract: extractPhp, extractImports: extractImportsPhp },
+  ".rb": { language: "ruby", grammar: "ruby", extract: extractRuby, extractImports: extractImportsRuby },
+  ".rake": { language: "ruby", grammar: "ruby", extract: extractRuby, extractImports: extractImportsRuby },
   ".vue": SFC_ENTRY("vue"),
   ".svelte": SFC_ENTRY("svelte"),
 };

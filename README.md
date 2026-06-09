@@ -6,7 +6,7 @@ Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex
 
 **27 MCP tools / 28 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
 
-**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · **Vue** · **Svelte** (SFC `<script>`)
+**Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
 | Capability               | TS/JS | Python | Go  | Rust | Java | C#  | C   | C++ | Kt  | Swift |
 |--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|
@@ -17,7 +17,7 @@ Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex
 | Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
 | Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     |
 
-> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. (Ruby grammar in `tree-sitter-wasms@0.1.13` is unstable and was skipped.)
+> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. (Ruby was unblocked in v1.22.0 by upgrading `web-tree-sitter` to 0.21.0.)
 
 Each language uses the resolution strategy that fits it:
 - **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting.
@@ -740,6 +740,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.22.0** | **PHP & Ruby support** — `.php` (classes, interfaces, traits, enums, methods with visibility, `use` imports incl. grouped, require/include) and `.rb`/`.rake` (classes, modules, methods, `self.` singleton methods, `private` section tracking, require/require_relative). Unblocked by upgrading `web-tree-sitter` 0.20.8 → 0.21.0 (all existing grammars re-verified). **16 languages**. |
 | **1.21.0** | **Quality gate** — `ast-map check` fails CI when quality regresses: **baseline ratchet** vs `.ast-map.baseline.json` (cycles · dead exports · SDP · very-high complexity · score; `--update-baseline` re-anchors) + absolute thresholds (flags or config `"check"`). New MCP tool `check_quality_gate` (**28 tools**); GitHub Action gains `mode: check`. |
 | **1.20.0** | **Incremental cache + parallel parsing** — persistent content-hash parse cache in `.ast-map/cache` (on by default, never stale, warm hits ~60× faster on large files; `ast-map cache stats|clear`, `AST_MAP_NO_CACHE`, `"cache": false`) + worker-thread **parallel parsing** for bulk scans (auto-sized, `AST_MAP_WORKERS` override, sequential fallback). |
 | **1.19.0** | **Dashboard: coupling + SDP** — `ast-map report` / `get_codebase_report` now include **module coupling** (per-directory instability bars) and **layer violations** (stable→volatile, SDP) cards, plus an SDP stat; SDP inversions also factor into the health score. The v1.14–1.16 metrics are now visual. |

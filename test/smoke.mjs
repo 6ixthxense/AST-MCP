@@ -249,6 +249,44 @@ check("Swift: struct Point detected", sw.symbols.some((s)=>s.name==="Point" && s
 check("Swift: protocol Reader -> interface", sw.symbols.some((s)=>s.name==="Reader" && s.kind === "interface"));
 check("Swift: imports Foundation", sw.imports?.some((i)=>i.from === "Foundation") ?? false);
 
+// ─── PHP ──────────────────────────────────────────────────────────────────
+const php = await run("Sample.php", [
+  "namespace:App\\Service",
+  "interface:Greeter",
+  "class:Loggable",
+  "class:UserService",
+  "method:__construct",
+  "method:greet",
+  "method:helper",
+  "enum:Status",
+  "function:topLevel",
+  "const:GLOBAL_C",
+]);
+const phpSvc = php.symbols.find((s) => s.name === "UserService");
+check("PHP: protected helper -> private", phpSvc?.children.find((c) => c.name === "helper")?.visibility === "private");
+check("PHP: private const MAX", phpSvc?.children.find((c) => c.name === "MAX")?.visibility === "private");
+check("PHP: trait Loggable -> class", php.symbols.some((s) => s.name === "Loggable" && s.kind === "class"));
+check("PHP: use User import", php.imports?.some((i) => i.symbol === "User" && i.from === "App\\Models\\User") ?? false);
+check("PHP: grouped use Str", php.imports?.some((i) => i.symbol === "Str" && i.from === "App\\Util\\Str") ?? false);
+check("PHP: require_once side-effect", php.imports?.some((i) => i.isSideEffect && i.from === "legacy.php") ?? false);
+
+// ─── Ruby ─────────────────────────────────────────────────────────────────
+const rb = await run("sample.rb", [
+  "namespace:Billing",
+  "class:Invoice",
+  "method:initialize",
+  "method:self.from_json",
+  "method:validate!",
+  "method:self.module_method",
+  "function:top_level",
+  "const:MAX_RETRIES",
+]);
+const rbInvoice = rb.symbols.find((s) => s.name === "Billing")?.children.find((c) => c.name === "Invoice");
+check("Ruby: validate! is private (section)", rbInvoice?.children.find((c) => c.name === "validate!")?.visibility === "private");
+check("Ruby: initialize is public", rbInvoice?.children.find((c) => c.name === "initialize")?.visibility === "public");
+check("Ruby: require json", rb.imports?.some((i) => i.from === "json") ?? false);
+check("Ruby: require_relative ./helper", rb.imports?.some((i) => i.from === "./helper") ?? false);
+
 // ─── TSX component props ──────────────────────────────────────────────────
 const tsx = await run("Component.tsx", []);
 const tBtn = tsx.symbols.find((s) => s.name === "Button");

@@ -1,6 +1,6 @@
 {
   "name": "universal-ast-mapper",
-  "version": "1.21.0",
+  "version": "1.22.0",
   "description": "MCP server that maps source files into a normalized code skeleton (JSON + HTML) using tree-sitter.",
   "type": "module",
   "main": "dist/index.js",
@@ -37,7 +37,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^14.0.3",
     "tree-sitter-wasms": "0.1.13",
-    "web-tree-sitter": "0.20.8",
+    "web-tree-sitter": "0.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
