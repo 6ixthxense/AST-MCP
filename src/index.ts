@@ -41,6 +41,7 @@ import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
 import { findLayerViolations } from "./layers.js";
 import { computeModuleCoupling } from "./modulecoupling.js";
+import { registerPrompts } from "./prompts.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -99,6 +100,8 @@ const server = new McpServer({
   name: "universal-ast-mapper",
   version: PKG_VERSION,
 });
+
+registerPrompts(server);
 
 /* ----------------------- tool: list_supported_languages ----------------------- */
 server.registerTool(
