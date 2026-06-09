@@ -6,6 +6,11 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.22.1] — 2026-06-10 · Docs
+- README refreshed to match v1.20–1.22: 28 tools / 30 commands, PHP+Ruby capability
+  columns, `cache`/`check` CLI + config + env-var docs, `check_quality_gate` reference,
+  Action `mode: check` example, new Performance section. No code changes.
+
 ## [1.22.0] — 2026-06-10 · PHP & Ruby support
 - **PHP** (`.php`): classes/interfaces/traits/enums, methods with visibility modifiers,
   class consts + properties, namespaces; imports from `use` (incl. grouped `use A\{B, C}`
