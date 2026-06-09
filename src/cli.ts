@@ -22,6 +22,7 @@ import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
 import { findLayerViolations } from "./layers.js";
+import { computeModuleCoupling } from "./modulecoupling.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -607,6 +608,33 @@ program
     }
     console.log();
     console.log(indent(dim(`${violations.length} stable file(s) depend on more volatile ones \u2014 they churn when those do`)));
+    console.log();
+  });
+
+// ─── Command: modules ─────────────────────────────────────────────────────────
+
+program
+  .command("modules [dir]")
+  .alias("mods")
+  .description("Directory/module-level coupling: per-module Ca / Ce / instability + edges")
+  .option("--json", "Output as JSON")
+  .action(async (dir: string | undefined, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+    const skeletons = await gatherSkeletons(abs);
+    const mc = computeModuleCoupling(buildSymbolGraph(skeletons, ROOT));
+    if (opts.json) return jsonOut(mc);
+    header(`Module Coupling \u2014 ${rel}/  ${dim("(directory-level Ca / Ce / instability)")}`);
+    if (mc.modules.length === 0) { console.log(indent(dim("No cross-module imports found."))); console.log(); return; }
+    const icolor = (i: number) => (i >= 0.8 ? red : i <= 0.2 ? green : yellow);
+    table(
+      mc.modules.map((m) => [String(m.files), String(m.afferent), String(m.efferent), icolor(m.instability)(m.instability.toFixed(2)), m.module]),
+      [["Files", 6], ["Ca", 4], ["Ce", 4], ["I", 6], ["Module", 40]],
+    );
+    if (mc.edges.length) {
+      console.log(indent(bold("Inter-module dependencies:")));
+      for (const e of mc.edges.slice(0, 20)) console.log(indent(`  ${e.from} ${dim("\u2192")} ${e.to} ${dim(`(${e.weight})`)}`));
+    }
     console.log();
   });
 

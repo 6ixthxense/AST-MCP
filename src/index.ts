@@ -40,6 +40,7 @@ import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
 import { findLayerViolations } from "./layers.js";
+import { computeModuleCoupling } from "./modulecoupling.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -1097,6 +1098,41 @@ server.registerTool(
       }
       const violations = findLayerViolations(buildSymbolGraph(skels, ROOT), minGap ?? 0);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: violations.length, violations });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_module_coupling ─────────────────────────── */
+server.registerTool(
+  "get_module_coupling",
+  {
+    title: "Module coupling (directory-level Ca / Ce / instability)",
+    description:
+      "Aggregate the import graph up to the directory/module level: per-module afferent (Ca) / " +
+      "efferent (Ce) coupling and instability, plus the weighted inter-module edges. Intra-module " +
+      "imports (files importing siblings in the same directory) are ignored — only cross-module " +
+      "dependencies count. The architectural bird's-eye view above per-file coupling.",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to scan. Default project root."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. get_module_coupling requires a directory.`);
+      }
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(ROOT, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const mc = computeModuleCoupling(buildSymbolGraph(skels, ROOT));
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", moduleCount: mc.modules.length, ...mc });
     } catch (err) {
       return errorText(describeError(err));
     }

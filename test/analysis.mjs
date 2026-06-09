@@ -29,6 +29,7 @@ const { computeDiff, computeRisk, isGitRepo } = await import("../dist/gitdiff.js
 const { packContext } = await import("../dist/contextpack.js");
 const { computeCoupling } = await import("../dist/coupling.js");
 const { findLayerViolations } = await import("../dist/layers.js");
+const { computeModuleCoupling } = await import("../dist/modulecoupling.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -476,6 +477,23 @@ console.log("\n=== Symbol Search ===");
   check("violation is the stable->volatile edge s.ts -> v.ts", v[0]?.from === "s.ts" && v[0]?.to === "v.ts");
   check("severity = toInstability - fromInstability (~0.42)", Math.abs(v[0]?.severity - 0.42) < 0.01);
   check("from is more stable than to", v[0]?.fromInstability < v[0]?.toInstability);
+}
+
+// ─── Module coupling ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Module Coupling ===");
+  // Three modules: ui -> api -> core (a clean stability gradient).
+  const g = {
+    nodes: ["ui/a","api/b","core/c"].map((id) => ({ id: id + ".ts", nodeType: "file" })),
+    edges: [["ui/a","api/b"],["api/b","core/c"]].map(([f, t]) => ({ from: f + ".ts", to: t + ".ts", edgeType: "imports" })),
+  };
+  const mc = computeModuleCoupling(g);
+  const by = Object.fromEntries(mc.modules.map((m) => [m.module, m]));
+  check("core module is stable (I=0)", by["core"]?.instability === 0 && by["core"]?.afferent === 1);
+  check("api module is in the middle (I=0.5)", by["api"]?.instability === 0.5);
+  check("ui module is unstable (I=1)", by["ui"]?.instability === 1 && by["ui"]?.afferent === 0);
+  check("two inter-module edges, intra-module ignored", mc.edges.length === 2);
+  check("edge ui -> api exists", mc.edges.some((e) => e.from === "ui" && e.to === "api"));
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
