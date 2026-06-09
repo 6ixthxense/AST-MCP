@@ -21,6 +21,7 @@ import { buildReport, buildReportHtml } from "./report.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
+import { findLayerViolations } from "./layers.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -581,6 +582,31 @@ program
       [["Ca", 4], ["Ce", 4], ["I", 6], ["File", 46]],
     );
     console.log(indent(dim("high Ca = load-bearing (break carefully) · high I = volatile")));
+    console.log();
+  });
+
+// ─── Command: layers ──────────────────────────────────────────────────────────
+
+program
+  .command("layers [dir]")
+  .alias("sdp")
+  .description("Stable Dependencies Principle: stable files that depend on volatile ones")
+  .option("--json", "Output as JSON")
+  .option("-g, --min-gap <n>", "Only show violations with instability gap > n", (v) => parseFloat(v), 0)
+  .action(async (dir: string | undefined, opts: { json?: boolean; minGap: number }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+    const skeletons = await gatherSkeletons(abs);
+    const violations = findLayerViolations(buildSymbolGraph(skeletons, ROOT), opts.minGap);
+    if (opts.json) return jsonOut({ count: violations.length, violations });
+    header(`Layer Violations \u2014 ${rel}/  ${dim("(stable \u2192 volatile dependencies, SDP)")}`);
+    if (violations.length === 0) { console.log(indent(green("\u2713 No SDP violations \u2014 dependencies flow toward stability."))); console.log(); return; }
+    for (const v of violations) {
+      const sev = v.severity >= 0.4 ? red : v.severity >= 0.2 ? yellow : dim;
+      console.log(indent(`${sev(v.severity.toFixed(2))}  ${bold(v.from)} ${dim(`(I=${v.fromInstability})`)} ${red("\u2192")} ${v.to} ${dim(`(I=${v.toInstability})`)}`));
+    }
+    console.log();
+    console.log(indent(dim(`${violations.length} stable file(s) depend on more volatile ones \u2014 they churn when those do`)));
     console.log();
   });
 

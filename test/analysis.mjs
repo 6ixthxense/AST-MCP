@@ -28,6 +28,7 @@ const { buildReport, buildReportHtml } = await import("../dist/report.js");
 const { computeDiff, computeRisk, isGitRepo } = await import("../dist/gitdiff.js");
 const { packContext } = await import("../dist/contextpack.js");
 const { computeCoupling } = await import("../dist/coupling.js");
+const { findLayerViolations } = await import("../dist/layers.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -455,6 +456,26 @@ console.log("\n=== Symbol Search ===");
   check("router.ts is unstable (I=1, fan-out only)", by["router.ts"]?.instability === 1 && by["router.ts"]?.afferent === 0);
   check("auth.ts is in the middle (I=0.5)", by["auth.ts"]?.instability === 0.5);
   check("instability within [0,1]", m.every((x) => x.instability >= 0 && x.instability <= 1));
+}
+
+// ─── Layer violations (Stable Dependencies Principle) ─────────────────────────
+{
+  console.log("\n=== Layer Violations (SDP) ===");
+  // Clean fixture: stable utils is imported by less-stable files (correct direction).
+  const clean = findLayerViolations(await buildGraph(GRAPH_DIR));
+  check("clean graph fixture has no SDP violations", clean.length === 0);
+  // Synthetic graph: stable S (Ca=3,Ce=1 -> I=0.25) imports volatile V (Ca=1,Ce=2 -> I=0.67).
+  const g = {
+    nodes: ["s","v","x1","x2","x3","y1","y2"].map((id) => ({ id: id + ".ts", nodeType: "file" })),
+    edges: [
+      ["x1","s"],["x2","s"],["x3","s"],["s","v"],["v","y1"],["v","y2"],
+    ].map(([f, t]) => ({ from: f + ".ts", to: t + ".ts", edgeType: "imports" })),
+  };
+  const v = findLayerViolations(g);
+  check("synthetic graph reports exactly one SDP violation", v.length === 1);
+  check("violation is the stable->volatile edge s.ts -> v.ts", v[0]?.from === "s.ts" && v[0]?.to === "v.ts");
+  check("severity = toInstability - fromInstability (~0.42)", Math.abs(v[0]?.severity - 0.42) < 0.01);
+  check("from is more stable than to", v[0]?.fromInstability < v[0]?.toInstability);
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

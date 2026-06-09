@@ -39,6 +39,7 @@ import { buildReport } from "./report.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
+import { findLayerViolations } from "./layers.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -1060,6 +1061,42 @@ server.registerTool(
       }
       const metrics = computeCoupling(buildSymbolGraph(skels, ROOT));
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: metrics.length, files: metrics });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_layer_violations ────────────────────────── */
+server.registerTool(
+  "get_layer_violations",
+  {
+    title: "Layer violations (Stable Dependencies Principle)",
+    description:
+      "Find dependencies that point the wrong way on the stability gradient: a stable file " +
+      "(low instability) that imports a more volatile file (high instability). Per Robert C. Martin's " +
+      "Stable Dependencies Principle, stable code should not depend on volatile code — it gets dragged " +
+      "along every time the volatile file churns. Results are sorted by severity (the instability gap).",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to scan. Default project root."),
+      minGap: z.number().optional().describe("Only report violations whose instability gap exceeds this (0-1). Default 0."),
+    },
+  },
+  async ({ path: input, minGap }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. get_layer_violations requires a directory.`);
+      }
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(ROOT, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const violations = findLayerViolations(buildSymbolGraph(skels, ROOT), minGap ?? 0);
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: violations.length, violations });
     } catch (err) {
       return errorText(describeError(err));
     }
