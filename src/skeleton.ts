@@ -6,6 +6,7 @@ import { detectLanguage, supportedExtensions } from "./registry.js";
 import { parseSource } from "./parser.js";
 import { countSymbols, toOutline } from "./extractors/common.js";
 import { extractScript } from "./sfc.js";
+import { diskCacheKey, diskCacheGet, diskCachePut } from "./diskcache.js";
 
 export const SCHEMA_VERSION = "1.1";
 export const GRAMMAR_SOURCE = "tree-sitter-wasms@0.1.13";
@@ -72,7 +73,21 @@ export async function buildSkeleton(
     return cached.file === wantFile ? cached : { ...cached, file: wantFile };
   }
 
-  let source = fs.readFileSync(absPath, "utf8");
+  const rawSource = fs.readFileSync(absPath, "utf8");
+
+  // Persistent cache (content-hash keyed, see diskcache.ts). A hit skips
+  // parsing entirely; entries can never be stale because the key embeds the
+  // file's bytes + detail + schema/grammar versions.
+  const dKey = diskCacheKey(rawSource, opts.detail, SCHEMA_VERSION, GRAMMAR_SOURCE);
+  const fromDisk = diskCacheGet(dKey);
+  if (fromDisk) {
+    const wantFile = relPath.split(path.sep).join("/");
+    const hit = fromDisk.file === wantFile ? fromDisk : { ...fromDisk, file: wantFile };
+    setCached(absPath, opts.detail, hit);
+    return hit;
+  }
+
+  let source = rawSource;
   let grammar = entry.grammar;
   if (entry.sfc) {
     const script = extractScript(source);
@@ -99,6 +114,7 @@ export async function buildSkeleton(
   };
 
   setCached(absPath, opts.detail, result);
+  diskCachePut(dKey, result);
   return result;
 }
 

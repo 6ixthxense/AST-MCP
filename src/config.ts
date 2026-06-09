@@ -50,6 +50,8 @@ export interface AstMapConfig {
   maxFileBytes?: number;
   /** Default output directory for HTML. */
   outputDir?: string;
+  /** Persistent parse cache in <root>/.ast-map/cache (default true). */
+  cache?: boolean;
   /** Per-rule overrides for validate_architecture. */
   rules?: {
     "large-file"?: ValidationRuleConfig;

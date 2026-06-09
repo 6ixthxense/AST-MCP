@@ -7,6 +7,8 @@ import { z } from "zod";
 import { fileURLToPath } from "node:url";
 
 import { resolveOptions, loadProjectConfig, type SkeletonOptions } from "./config.js";
+import { initDiskCache, defaultCacheDir } from "./diskcache.js";
+import { buildSkeletonsBulk } from "./pool.js";
 import {
   buildSkeleton,
   collectSourceFiles,
@@ -45,6 +47,11 @@ import { registerPrompts } from "./prompts.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
+
+// Persistent parse cache (disable with AST_MAP_NO_CACHE=1 or "cache": false in config).
+if (process.env.AST_MAP_NO_CACHE !== "1" && loadProjectConfig(ROOT).cache !== false) {
+  initDiskCache(defaultCacheDir(ROOT));
+}
 
 interface ResolvedPath {
   abs: string;
@@ -186,12 +193,17 @@ server.registerTool(
         const results: Array<Record<string, unknown>> = [];
         const successSkeletons = [];
         let totalSymbols = 0;
-        for (const file of files) {
-          const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
-          try {
-            const skel = await buildSkeleton(file, fileRel, opts);
+        const items = files.map((file) => ({
+          abs: file,
+          rel: path.relative(ROOT, file).split(path.sep).join("/"),
+        }));
+        const built = await buildSkeletonsBulk(items, opts);
+        for (let i = 0; i < built.length; i++) {
+          const r = built[i];
+          if (r) {
+            const skel = r.skel;
             totalSymbols += skel.symbolCount;
-            const htmlPath = opts.emitHtml ? writeHtml(skel, fileRel, opts) : null;
+            const htmlPath = opts.emitHtml ? writeHtml(skel, items[i].rel, opts) : null;
             successSkeletons.push(skel);
             results.push({
               file: skel.file,
@@ -199,8 +211,8 @@ server.registerTool(
               symbolCount: skel.symbolCount,
               htmlPath,
             });
-          } catch (err) {
-            results.push({ file: fileRel.split(path.sep).join("/"), error: describeError(err) });
+          } else {
+            results.push({ file: items[i].rel, error: "parse failed or unsupported file type" });
           }
         }
 

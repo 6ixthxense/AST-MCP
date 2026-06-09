@@ -740,6 +740,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.20.0** | **Incremental cache + parallel parsing** — persistent content-hash parse cache in `.ast-map/cache` (on by default, never stale, warm hits ~60× faster on large files; `ast-map cache stats|clear`, `AST_MAP_NO_CACHE`, `"cache": false`) + worker-thread **parallel parsing** for bulk scans (auto-sized, `AST_MAP_WORKERS` override, sequential fallback). |
 | **1.19.0** | **Dashboard: coupling + SDP** — `ast-map report` / `get_codebase_report` now include **module coupling** (per-directory instability bars) and **layer violations** (stable→volatile, SDP) cards, plus an SDP stat; SDP inversions also factor into the health score. The v1.14–1.16 metrics are now visual. |
 | **1.18.0** | **Vue & Svelte SFC support** — `.vue` and `.svelte` single-file components are now parsed: the `<script>` / `<script setup>` block is lifted out (TS or JS) and its symbols + imports extracted, with cross-file graph edges into plain modules. Blank-padding keeps every symbol's line numbers pointing at the original SFC. **14 languages**. |
 | **1.17.0** | **MCP prompts** — the server now registers 5 parameterized **prompts** (`architecture_audit`, `safe_refactor`, `dead_code_cleanup`, `health_check`, `onboard_codebase`): named workflows a client can invoke from its prompt menu, each chaining the right tools. The Cookbook recipes, one call away. |

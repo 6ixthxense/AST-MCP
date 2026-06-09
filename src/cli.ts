@@ -6,6 +6,8 @@ import fs from "node:fs";
 import { buildSkeleton, collectSourceFiles } from "./skeleton.js";
 import { renderHtml, renderCombinedHtml } from "./html.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
+import { initDiskCache, defaultCacheDir, diskCacheStats, clearDiskCache } from "./diskcache.js";
+import { buildSkeletonsBulk } from "./pool.js";
 import { supportedLanguages } from "./registry.js";
 import { findSymbol, findRelatedSymbols, findServerImports, isApiRoute, findMissingTryCatch, checkGeneralRules, GENERAL_RULE_DEFAULTS } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
@@ -28,6 +30,11 @@ import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
 
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
+
+// Persistent parse cache (disable with AST_MAP_NO_CACHE=1 or "cache": false in config).
+if (process.env.AST_MAP_NO_CACHE !== "1" && loadProjectConfig(ROOT).cache !== false) {
+  initDiskCache(defaultCacheDir(ROOT));
+}
 
 // ─── ANSI colours (disabled when not a TTY) ───────────────────────────────────
 const tty = process.stdout.isTTY ?? false;
@@ -78,18 +85,38 @@ function resolveArg(p: string): { abs: string; rel: string } {
 async function gatherSkeletons(dirAbs: string, detail: "outline" | "full" = "outline"): Promise<SkeletonFile[]> {
   const opts = resolveOptions({ detail, emitHtml: false });
   const files = collectSourceFiles(dirAbs, opts);
-  const skeletons: SkeletonFile[] = [];
-  for (const file of files) {
-    const fr = path.relative(ROOT, file).split(path.sep).join("/");
-    try { skeletons.push(await buildSkeleton(file, fr, opts)); } catch { /* skip parse errors */ }
-  }
-  return skeletons;
+  const items = files.map((f) => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  return built.filter((r) => r !== null).map((r) => r!.skel);
 }
 
 function die(msg: string): never {
   console.error(red("✗") + " " + msg);
   process.exit(1);
 }
+
+// ─── Command: cache ───────────────────────────────────────────────────────────
+
+program
+  .command("cache [action]")
+  .description("Inspect or clear the persistent parse cache (actions: stats, clear)")
+  .option("--json", "Output as JSON")
+  .action((action: string | undefined, opts: { json?: boolean }) => {
+    const dir = defaultCacheDir(ROOT);
+    if (action === "clear") {
+      const removed = clearDiskCache(dir);
+      if (opts.json) jsonOut({ dir, removed });
+      else console.log(green("\u2713") + ` cleared ${removed} cached ${removed === 1 ? "entry" : "entries"} (${dir})`);
+      return;
+    }
+    const stats = diskCacheStats(dir);
+    if (opts.json) jsonOut(stats);
+    else {
+      console.log(bold("Parse cache") + "  " + dim(stats.dir));
+      console.log(`  entries: ${stats.entries}`);
+      console.log(`  size:    ${(stats.bytes / 1024).toFixed(1)} KB`);
+    }
+  });
 
 // ─── Command: langs ───────────────────────────────────────────────────────────
 

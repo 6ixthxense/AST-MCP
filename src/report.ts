@@ -1,9 +1,10 @@
 import path from "node:path";
-import { collectSourceFiles, buildSkeleton } from "./skeleton.js";
+import { collectSourceFiles } from "./skeleton.js";
+import { buildSkeletonsBulk } from "./pool.js";
 import { resolveOptions } from "./config.js";
 import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getTopSymbols } from "./graph-analysis.js";
-import { computeFileComplexity, type FunctionComplexity } from "./complexity.js";
+import type { FunctionComplexity } from "./complexity.js";
 import { findLayerViolations, type LayerViolation } from "./layers.js";
 import { computeModuleCoupling, type ModuleMetric } from "./modulecoupling.js";
 import type { SkeletonFile } from "./types.js";
@@ -42,21 +43,24 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   const hotspots: (FunctionComplexity & { file: string })[] = [];
   let cxSum = 0, cxN = 0, cxMax = 0;
 
-  for (const file of files) {
-    const rel = path.relative(root, file).split(path.sep).join("/");
-    try {
-      const skel = await buildSkeleton(file, rel, opts);
-      skeletons.push(skel);
-      symbolCount += skel.symbolCount;
-      langCount.set(skel.language, (langCount.get(skel.language) ?? 0) + 1);
-      const fc = await computeFileComplexity(file, rel);
-      if (fc) {
-        for (const f of fc.functions) {
-          hotspots.push({ ...f, file: rel });
-          cxSum += f.complexity; cxN++; cxMax = Math.max(cxMax, f.complexity);
-        }
+  const items = files.map((file) => ({
+    abs: file,
+    rel: path.relative(root, file).split(path.sep).join("/"),
+  }));
+  const built = await buildSkeletonsBulk(items, opts, true);
+  for (let i = 0; i < built.length; i++) {
+    const r = built[i];
+    if (!r) continue; // skip unparsable
+    const rel = items[i].rel;
+    skeletons.push(r.skel);
+    symbolCount += r.skel.symbolCount;
+    langCount.set(r.skel.language, (langCount.get(r.skel.language) ?? 0) + 1);
+    if (r.complexity) {
+      for (const f of r.complexity.functions) {
+        hotspots.push({ ...f, file: rel });
+        cxSum += f.complexity; cxN++; cxMax = Math.max(cxMax, f.complexity);
       }
-    } catch { /* skip unparsable */ }
+    }
   }
 
   const graph = buildSymbolGraph(skeletons, root);

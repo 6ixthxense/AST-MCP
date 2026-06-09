@@ -6,6 +6,18 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.20.0] — 2026-06-10 · Incremental cache + parallel parsing
+- **Persistent parse cache**: skeletons are cached on disk under `<root>/.ast-map/cache`,
+  keyed by content hash + detail + schema/grammar versions — never stale by construction,
+  survives across processes (warm hits on large files ~60× faster than a re-parse).
+  On by default; disable with `AST_MAP_NO_CACHE=1` or `"cache": false` in config.
+- **Parallel parsing**: bulk scans distribute work over a worker-thread pool
+  (auto-sized, engages at ≥ 64 files, `AST_MAP_WORKERS` override, sequential fallback
+  on any worker failure). `report` computes per-file complexity in the workers too.
+- New CLI command `ast-map cache [stats|clear]`.
+- New modules `diskcache` and `pool` (`buildSkeletonsBulk`); `AstMapConfig.cache`.
+- Tests: new `test/cache-smoke.mjs` (18 checks), wired into `npm test`.
+
 ## [1.19.0] — 2026-06-09 · Dashboard: coupling + SDP
 - The health dashboard (`ast-map report` / `get_codebase_report`) now surfaces the
   v1.14–1.16 architecture metrics: a **Module coupling** card (per-directory instability
