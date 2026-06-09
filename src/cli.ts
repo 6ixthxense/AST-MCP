@@ -20,6 +20,7 @@ import { readSourceMap } from "./sourcemap.js";
 import { buildReport, buildReportHtml } from "./report.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
+import { computeCoupling } from "./coupling.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
@@ -556,6 +557,30 @@ program
       files.slice(0, opts.top).map((f) => [String(f.risk), `${f.churn} × ${f.maxComplexity}`, f.file]),
       [["Risk", 7], ["churn×cx", 12], ["File", 44]],
     );
+    console.log();
+  });
+
+// ─── Command: coupling ────────────────────────────────────────────────────────
+
+program
+  .command("coupling [dir]")
+  .description("Per-file coupling metrics: afferent (Ca), efferent (Ce), instability")
+  .option("--json", "Output as JSON")
+  .option("-n, --top <n>", "Show top N by total coupling", (v) => parseInt(v, 10), 25)
+  .action(async (dir: string | undefined, opts: { json?: boolean; top: number }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+    const skeletons = await gatherSkeletons(abs);
+    const metrics = computeCoupling(buildSymbolGraph(skeletons, ROOT));
+    if (opts.json) return jsonOut({ count: metrics.length, files: metrics });
+    header(`Coupling \u2014 ${rel}/  ${dim("(Ca = fan-in, Ce = fan-out, I = instability)")}`);
+    if (metrics.length === 0) { console.log(indent(dim("No import edges found."))); console.log(); return; }
+    const icolor = (i: number) => (i >= 0.8 ? red : i <= 0.2 ? green : yellow);
+    table(
+      metrics.slice(0, opts.top).map((m) => [String(m.afferent), String(m.efferent), icolor(m.instability)(m.instability.toFixed(2)), m.file]),
+      [["Ca", 4], ["Ce", 4], ["I", 6], ["File", 46]],
+    );
+    console.log(indent(dim("high Ca = load-bearing (break carefully) · high I = volatile")));
     console.log();
   });
 

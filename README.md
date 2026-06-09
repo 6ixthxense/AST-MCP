@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**24 MCP tools / 25 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
+**25 MCP tools / 26 CLI commands** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, and a one-page **health dashboard** (`ast-map report`).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift
 
@@ -107,6 +107,7 @@ ast-map report    [dir]            [-o report.html]
 ast-map diff      [base]           [--dir <d>]   # git-aware changed symbols + impact
 ast-map risk      [dir]            [-n N]        # churn × complexity
 ast-map pack      <file> [symbol]  [--scan <d>] # minimal context pack
+ast-map coupling  [dir]            [-n N]        # Ca / Ce / instability per file
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
@@ -414,6 +415,17 @@ Rank files by **refactor risk = git churn × max complexity** — the files that
 
 ---
 
+### `get_coupling`
+Per-file **coupling metrics** (Robert C. Martin): afferent coupling **Ca** (fan-in), efferent coupling **Ce** (fan-out), and **instability** I = Ce/(Ca+Ce) (0 = stable / load-bearing, 1 = unstable / volatile).
+
+```json
+{ "files": [ { "file": "src/types.ts", "afferent": 27, "efferent": 0, "instability": 0 } ] }
+```
+
+**Params:** `path` (optional)
+
+---
+
 ### `get_change_impact`
 Given a file + symbol, reverse-traverse the import graph to compute **blast radius**.
 
@@ -687,6 +699,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.14.0** | **Coupling metrics** — new `get_coupling` MCP tool + `ast-map coupling [dir]` CLI: per-file afferent (Ca) / efferent (Ce) coupling and **instability** I = Ce/(Ca+Ce), the way to spot load-bearing files (high Ca) vs. volatile ones (high I). **25 MCP tools**. |
 | **1.13.0** | **Context-pack** — new `pack_context` MCP tool + `ast-map pack <file> [symbol]` CLI: the minimal context to work on a symbol (its source + the signatures it depends on + its dependents) with a token estimate, instead of reading whole files. **24 MCP tools**. |
 | **1.12.0** | **Git-aware analysis** — `ast-map diff [base]` + `get_diff` tool: changed symbols since a ref, **breaking changes** (removed / signature-changed exports), and blast radius. `ast-map risk` + `get_risk_map` tool: rank files by churn × complexity. Brings a time/history dimension. **23 MCP tools**. |
 | **1.11.0** | **Code-health dashboard** — new `ast-map report` CLI writes a premium self-contained HTML overview (grade A–F, stats, language breakdown, complexity hotspots, god nodes, dead code, cycles) + `get_codebase_report` MCP tool for the same as JSON. |
@@ -719,9 +732,4 @@ Not part of the public API: the internal `src/` module layout and the generated 
 | **0.6.0** | **3 new languages: Rust · Java · C#** (extractors + import parsing) · cross-language resolver in `crosslang.ts` (Java FQCN index, C# namespace index, Rust `crate::` module walk) · symbol-graph `imports` edges + `resolveFileImports` enrichment + `get_call_graph` callee resolution rewired through it · Java `package` and C# `namespace` captured as directives |
 | **0.5.3** | Auto-install `/ast-map` Claude Code skill on `npm install` · `postinstall` writes `~/.claude/skills/ast-map/SKILL.md` + registers trigger in `CLAUDE.md` (idempotent, CI-safe) |
 | **0.5.2** | Iterative DFS in `findCircularDeps` (eliminates stack overflow on large codebases) · `build_symbol_graph` inline size guard (>2000 nodes → stats + warning) · integration test suite (`test/analysis.mjs`) |
-| **0.5.1** | Re-export tracking (`export { X } from './foo'`, barrel files) · `export const` surfaced as symbols · `const X = class {}` support · Python relative import fix · parser instance cache |
-| **0.5.0** | Call graph destructuring aliases · in-process parse cache · `.ast-map.config.json` · general validation rules (large-file, too-many-imports, god-export) |
-| **0.4.0** | `search_symbol` · `get_file_deps` · `get_top_symbols` · dead code confidence tiers · 3 new CLI commands |
-| **0.3.0** | `ast-map` CLI · `find_dead_code` · `find_circular_deps` · `get_change_impact` · `get_call_graph` |
-| **0.2.0** | Import extraction · `resolve_imports` · `build_symbol_graph` |
-| **0.1.0** | `get_skeleton_json` · `generate_skeleton` · `get_symbol_context` · `validate_architecture` |
+| **0.5.1** | Re-export tracking (`export { X } from './foo'`, barrel files

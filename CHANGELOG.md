@@ -6,6 +6,14 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.14.0] — 2026-06-09 · Coupling metrics
+- **`get_coupling`** + **`ast-map coupling [dir]`**: Robert C. Martin's per-file
+  coupling metrics — afferent coupling (Ca, fan-in), efferent coupling (Ce,
+  fan-out), and instability I = Ce/(Ca+Ce). High-Ca files are load-bearing (break
+  carefully); high-instability files change freely. Derived from the import graph.
+- Tests: 4 new assertions (109 total) verifying stable/unstable/middle files and
+  the [0,1] instability bound.
+
 ## [1.13.0] — 2026-06-08 · Context-pack
 - **`pack_context`** + **`ast-map pack <file> [symbol]`**: the minimal context to
   work on a symbol — its source, the signatures it depends on, and its dependents
@@ -135,11 +143,4 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 [1.8.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.8.0
 [1.7.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.7.0
 [1.6.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.6.0
-[1.5.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.5.0
-[1.4.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.4.0
-[1.3.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.3.0
-[1.2.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.2.0
-[1.1.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.1.0
-[1.0.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.0.0
-[0.9.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v0.9.0
-[0.8.1]: https://github.com/6ixthxense/AST-MCP/releases/tag/v0.8.1
+[1.5.0]: https://github.com/6ixthxense/AST-MCP/relea

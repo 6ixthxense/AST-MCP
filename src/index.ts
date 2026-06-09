@@ -38,6 +38,7 @@ import { readSourceMap } from "./sourcemap.js";
 import { buildReport } from "./report.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
+import { computeCoupling } from "./coupling.js";
 
 /** Files may only be read inside this root (override with AST_MAP_ROOT). */
 const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
@@ -1025,6 +1026,40 @@ server.registerTool(
       const scanAbs = scan ? resolveInRoot(scan).abs : ROOT;
       const pack = await packContext(abs, rel.split(path.sep).join("/"), ROOT, symbol, scanAbs);
       return jsonText(pack);
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_coupling ────────────────────────────────── */
+server.registerTool(
+  "get_coupling",
+  {
+    title: "Coupling metrics (afferent / efferent / instability)",
+    description:
+      "Compute Robert C. Martin's coupling metrics per file from the import graph: afferent coupling " +
+      "(Ca, fan-in), efferent coupling (Ce, fan-out), and instability I = Ce/(Ca+Ce) (0 = stable, " +
+      "1 = unstable). High-Ca files are load-bearing; high-instability files change freely.",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to scan. Default project root."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. get_coupling requires a directory.`);
+      }
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(ROOT, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const metrics = computeCoupling(buildSymbolGraph(skels, ROOT));
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: metrics.length, files: metrics });
     } catch (err) {
       return errorText(describeError(err));
     }

@@ -27,6 +27,7 @@ const { readSourceMap } = await import("../dist/sourcemap.js");
 const { buildReport, buildReportHtml } = await import("../dist/report.js");
 const { computeDiff, computeRisk, isGitRepo } = await import("../dist/gitdiff.js");
 const { packContext } = await import("../dist/contextpack.js");
+const { computeCoupling } = await import("../dist/coupling.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -442,6 +443,18 @@ console.log("\n=== Symbol Search ===");
   check("dependency signatures included", pack.dependencies.some((d) => d.symbols.some((x) => x.name === "hashPassword" && x.signature)));
   check("dependents include router.ts", pack.dependents.some((d) => d.file === "router.ts"));
   check("token estimate is small (minimal pack)", pack.tokenEstimate > 0 && pack.tokenEstimate < 400);
+}
+
+// ─── Coupling metrics ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Coupling Metrics ===");
+  const graph = await buildGraph(GRAPH_DIR);
+  const m = computeCoupling(graph);
+  const by = Object.fromEntries(m.map((x) => [x.file.split("/").pop(), x]));
+  check("utils.ts is stable (I=0, fan-in only)", by["utils.ts"]?.instability === 0 && by["utils.ts"]?.afferent >= 1);
+  check("router.ts is unstable (I=1, fan-out only)", by["router.ts"]?.instability === 1 && by["router.ts"]?.afferent === 0);
+  check("auth.ts is in the middle (I=0.5)", by["auth.ts"]?.instability === 0.5);
+  check("instability within [0,1]", m.every((x) => x.instability >= 0 && x.instability <= 1));
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
