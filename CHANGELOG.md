@@ -6,6 +6,19 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.23.0] — 2026-06-10 · Configurable root boundary (multi-root + unlocked)
+- **`AST_MAP_ROOT` accepts multiple roots**, separated by the OS path delimiter
+  (`;` Windows / `:` POSIX). The first root is primary; absolute paths inside any
+  listed root are allowed.
+- **`AST_MAP_UNLOCKED=1`** — opt-in: the MCP server analyzes **any existing absolute
+  path** the client asks for. Default behavior is unchanged (locked to the root list).
+- Every tool now computes rel-paths and graph roots against the **matched** root, so
+  reports/graphs on outside-root projects come out correct.
+- Clearer boundary error message (suggests both escape hatches).
+- New module `roots` (`parseRootsFromEnv`, `resolvePathInRoots`); CLI shares the parser.
+- Tests: new `test/roots-smoke.mjs` (13 checks) + end-to-end verified over MCP stdio
+  (locked rejects / unlocked analyzes an outside project).
+
 ## [1.22.1] — 2026-06-10 · Docs
 - README refreshed to match v1.20–1.22: 28 tools / 30 commands, PHP+Ruby capability
   columns, `cache`/`check` CLI + config + env-var docs, `check_quality_gate` reference,

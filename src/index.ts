@@ -46,29 +46,23 @@ import { findLayerViolations } from "./layers.js";
 import { computeModuleCoupling } from "./modulecoupling.js";
 import { registerPrompts } from "./prompts.js";
 
-/** Files may only be read inside this root (override with AST_MAP_ROOT). */
-const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
+import { parseRootsFromEnv, resolvePathInRoots, type ResolvedPath } from "./roots.js";
+
+/**
+ * Security boundary. AST_MAP_ROOT may list several roots (path-delimiter
+ * separated); AST_MAP_UNLOCKED=1 allows any absolute path. The first root is
+ * the primary — relative inputs resolve against it.
+ */
+const ROOTS = parseRootsFromEnv();
+const ROOT = ROOTS.roots[0];
 
 // Persistent parse cache (disable with AST_MAP_NO_CACHE=1 or "cache": false in config).
 if (process.env.AST_MAP_NO_CACHE !== "1" && loadProjectConfig(ROOT).cache !== false) {
   initDiskCache(defaultCacheDir(ROOT));
 }
 
-interface ResolvedPath {
-  abs: string;
-  rel: string;
-}
-
 function resolveInRoot(input: string): ResolvedPath {
-  const abs = path.resolve(ROOT, input);
-  const rel = path.relative(ROOT, abs);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(
-      `Path "${input}" is outside the allowed root (${ROOT}). ` +
-        `Set the AST_MAP_ROOT environment variable to the project you want to map.`,
-    );
-  }
-  return { abs, rel: rel === "" ? path.basename(abs) : rel };
+  return resolvePathInRoots(input, ROOTS);
 }
 
 function htmlPathFor(rel: string, opts: SkeletonOptions): string {
@@ -141,7 +135,7 @@ server.registerTool(
   },
   async ({ path: input, detail }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) {
         return errorText(
           `"${input}" is a directory. Use generate_skeleton for directories.`,
@@ -186,7 +180,7 @@ server.registerTool(
   async ({ path: input, detail, emitHtml, combineHtml, outputDir }) => {
     try {
       const opts = resolveOptions({ detail, emitHtml, combineHtml, outputDir });
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       const stat = fs.statSync(abs);
 
       if (stat.isDirectory()) {
@@ -196,7 +190,7 @@ server.registerTool(
         let totalSymbols = 0;
         const items = files.map((file) => ({
           abs: file,
-          rel: path.relative(ROOT, file).split(path.sep).join("/"),
+          rel: path.relative(root, file).split(path.sep).join("/"),
         }));
         const built = await buildSkeletonsBulk(items, opts);
         for (let i = 0; i < built.length; i++) {
@@ -220,8 +214,8 @@ server.registerTool(
         let combinedHtmlPath: string | null = null;
         if (opts.combineHtml && successSkeletons.length > 0) {
           const outDir = opts.outputDir
-            ? path.resolve(ROOT, opts.outputDir)
-            : path.join(ROOT, ".ast-map");
+            ? path.resolve(root, opts.outputDir)
+            : path.join(root, ".ast-map");
           fs.mkdirSync(outDir, { recursive: true });
           combinedHtmlPath = path.join(outDir, "index.html");
           fs.writeFileSync(combinedHtmlPath, renderCombinedHtml(successSkeletons), "utf8");
@@ -229,7 +223,7 @@ server.registerTool(
 
         return jsonText({
           mode: "directory",
-          root: ROOT,
+          root: root,
           directory: rel.split(path.sep).join("/"),
           fileCount: files.length,
           totalSymbols,
@@ -275,7 +269,7 @@ server.registerTool(
   },
   async ({ path: input, symbol, kind, includeRelated }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is a directory. Provide a single file path.`);
       }
@@ -343,8 +337,8 @@ server.registerTool(
   },
   async ({ path: input, maxLines, maxImports, maxExports }) => {
     try {
-      const { abs } = resolveInRoot(input);
-      const projectConfig = loadProjectConfig(ROOT);
+      const { abs, root } = resolveInRoot(input);
+      const projectConfig = loadProjectConfig(root);
       const opts = resolveOptions({ detail: "full", emitHtml: false }, projectConfig);
       const stat = fs.statSync(abs);
 
@@ -370,7 +364,7 @@ server.registerTool(
       const violations: Violation[] = [];
 
       for (const file of filesToCheck) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         let source: string;
         try {
           source = fs.readFileSync(file, "utf8");
@@ -452,13 +446,13 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is a directory. Provide a single file path.`);
       }
       const opts = resolveOptions({ detail: "full", emitHtml: false });
       const skel = await buildSkeleton(abs, rel, opts);
-      const resolved = await resolveFileImports(skel, abs, ROOT);
+      const resolved = await resolveFileImports(skel, abs, root);
 
       return jsonText({
         file: rel,
@@ -505,7 +499,7 @@ server.registerTool(
   },
   async ({ path: input, detail, outputFile }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. build_symbol_graph requires a directory.`);
       }
@@ -517,7 +511,7 @@ server.registerTool(
       const errors: Array<{ file: string; error: string }> = [];
 
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch (err) {
@@ -525,7 +519,7 @@ server.registerTool(
         }
       }
 
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
 
       if (outputFile) {
         const { abs: outAbs } = resolveInRoot(outputFile);
@@ -589,7 +583,7 @@ server.registerTool(
   },
   async ({ path: input, detail }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. find_dead_code requires a directory.`);
       }
@@ -600,7 +594,7 @@ server.registerTool(
       const errors: Array<{ file: string; error: string }> = [];
 
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch (err) {
@@ -608,7 +602,7 @@ server.registerTool(
         }
       }
 
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
       const dead = findDeadExports(graph);
 
       return jsonText({
@@ -640,7 +634,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. find_circular_deps requires a directory.`);
       }
@@ -651,7 +645,7 @@ server.registerTool(
       const errors: Array<{ file: string; error: string }> = [];
 
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch (err) {
@@ -659,7 +653,7 @@ server.registerTool(
         }
       }
 
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
       const cycles = findCircularDeps(graph);
 
       return jsonText({
@@ -692,7 +686,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. find_duplicate_symbols requires a directory.`);
       }
@@ -703,7 +697,7 @@ server.registerTool(
       const errors: Array<{ file: string; error: string }> = [];
 
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch (err) {
@@ -711,7 +705,7 @@ server.registerTool(
         }
       }
 
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
       const duplicates = findDuplicateSymbols(graph);
 
       return jsonText({
@@ -743,7 +737,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       const stat = fs.statSync(abs);
 
       if (stat.isDirectory()) {
@@ -752,7 +746,7 @@ server.registerTool(
         const results = [];
         const errors: Array<{ file: string; error: string }> = [];
         for (const file of files) {
-          const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+          const fileRel = path.relative(root, file).split(path.sep).join("/");
           try {
             const fc = await computeFileComplexity(file, fileRel);
             if (fc) results.push(fc);
@@ -797,7 +791,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       const stat = fs.statSync(abs);
 
       if (stat.isDirectory()) {
@@ -806,7 +800,7 @@ server.registerTool(
         const results = [];
         const errors: Array<{ file: string; error: string }> = [];
         for (const file of files) {
-          const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+          const fileRel = path.relative(root, file).split(path.sep).join("/");
           try {
             const r = await findUnusedParams(file, fileRel);
             if (r && r.functions.length > 0) results.push(r);
@@ -851,7 +845,7 @@ server.registerTool(
   },
   async ({ type: typeName, path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. trace_type requires a directory.`);
       }
@@ -860,7 +854,7 @@ server.registerTool(
       const refs = [];
       const errors: Array<{ file: string; error: string }> = [];
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           refs.push(...(await traceTypeInFile(file, fileRel, typeName)));
         } catch (err) {
@@ -899,7 +893,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input ?? ".");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. analyze_workspace requires a directory.`);
       }
@@ -934,7 +928,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       const info = readSourceMap(abs, rel.split(path.sep).join("/"));
       if (!info) return errorText(`No source map found for "${input}".`);
       return jsonText(info);
@@ -959,11 +953,11 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input ?? ".");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. get_codebase_report requires a directory.`);
       }
-      const data = await buildReport(abs, ROOT);
+      const data = await buildReport(abs, root);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
     } catch (err) {
       return errorText(describeError(err));
@@ -990,12 +984,12 @@ server.registerTool(
   },
   async ({ path: input, baseline, updateBaseline }) => {
     try {
-      const { abs, rel } = resolveInRoot(input ?? ".");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. check_quality_gate requires a directory.`);
       }
-      const thresholds = loadProjectConfig(ROOT).check;
-      const result = await runQualityGate(abs, ROOT, {
+      const thresholds = loadProjectConfig(root).check;
+      const result = await runQualityGate(abs, root, {
         baselinePath: baseline,
         thresholds,
         updateBaseline,
@@ -1023,9 +1017,9 @@ server.registerTool(
   },
   async ({ base, path: input }) => {
     try {
-      if (!isGitRepo(ROOT)) return errorText("Not a git repository (or git is unavailable).");
-      const { abs, rel } = resolveInRoot(input ?? ".");
-      const data = await computeDiff(abs, ROOT, base ?? "HEAD");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
+      if (!isGitRepo(root)) return errorText("Not a git repository (or git is unavailable).");
+      const data = await computeDiff(abs, root, base ?? "HEAD");
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
     } catch (err) {
       return errorText(describeError(err));
@@ -1048,9 +1042,9 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      if (!isGitRepo(ROOT)) return errorText("Not a git repository (or git is unavailable).");
-      const { abs, rel } = resolveInRoot(input ?? ".");
-      const files = await computeRisk(abs, ROOT);
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
+      if (!isGitRepo(root)) return errorText("Not a git repository (or git is unavailable).");
+      const files = await computeRisk(abs, root);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: files.length, files: files.slice(0, 50) });
     } catch (err) {
       return errorText(describeError(err));
@@ -1075,10 +1069,10 @@ server.registerTool(
   },
   async ({ path: input, symbol, scan }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) return errorText(`"${input}" is a directory; pass a file.`);
-      const scanAbs = scan ? resolveInRoot(scan).abs : ROOT;
-      const pack = await packContext(abs, rel.split(path.sep).join("/"), ROOT, symbol, scanAbs);
+      const scanAbs = scan ? resolveInRoot(scan).abs : root;
+      const pack = await packContext(abs, rel.split(path.sep).join("/"), root, symbol, scanAbs);
       return jsonText(pack);
     } catch (err) {
       return errorText(describeError(err));
@@ -1101,7 +1095,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input ?? ".");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. get_coupling requires a directory.`);
       }
@@ -1109,10 +1103,10 @@ server.registerTool(
       const files = collectSourceFiles(abs, opts);
       const skels: SkeletonFile[] = [];
       for (const f of files) {
-        const r = path.relative(ROOT, f).split(path.sep).join("/");
+        const r = path.relative(root, f).split(path.sep).join("/");
         try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
       }
-      const metrics = computeCoupling(buildSymbolGraph(skels, ROOT));
+      const metrics = computeCoupling(buildSymbolGraph(skels, root));
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: metrics.length, files: metrics });
     } catch (err) {
       return errorText(describeError(err));
@@ -1137,7 +1131,7 @@ server.registerTool(
   },
   async ({ path: input, minGap }) => {
     try {
-      const { abs, rel } = resolveInRoot(input ?? ".");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. get_layer_violations requires a directory.`);
       }
@@ -1145,10 +1139,10 @@ server.registerTool(
       const files = collectSourceFiles(abs, opts);
       const skels: SkeletonFile[] = [];
       for (const f of files) {
-        const r = path.relative(ROOT, f).split(path.sep).join("/");
+        const r = path.relative(root, f).split(path.sep).join("/");
         try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
       }
-      const violations = findLayerViolations(buildSymbolGraph(skels, ROOT), minGap ?? 0);
+      const violations = findLayerViolations(buildSymbolGraph(skels, root), minGap ?? 0);
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: violations.length, violations });
     } catch (err) {
       return errorText(describeError(err));
@@ -1172,7 +1166,7 @@ server.registerTool(
   },
   async ({ path: input }) => {
     try {
-      const { abs, rel } = resolveInRoot(input ?? ".");
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. get_module_coupling requires a directory.`);
       }
@@ -1180,10 +1174,10 @@ server.registerTool(
       const files = collectSourceFiles(abs, opts);
       const skels: SkeletonFile[] = [];
       for (const f of files) {
-        const r = path.relative(ROOT, f).split(path.sep).join("/");
+        const r = path.relative(root, f).split(path.sep).join("/");
         try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
       }
-      const mc = computeModuleCoupling(buildSymbolGraph(skels, ROOT));
+      const mc = computeModuleCoupling(buildSymbolGraph(skels, root));
       return jsonText({ directory: rel.split(path.sep).join("/") || ".", moduleCount: mc.modules.length, ...mc });
     } catch (err) {
       return errorText(describeError(err));
@@ -1216,7 +1210,7 @@ server.registerTool(
   },
   async ({ path: input, symbol, scanDir }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is a directory. Provide a single file path.`);
       }
@@ -1227,7 +1221,7 @@ server.registerTool(
       const skeletons: SkeletonFile[] = [];
 
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch {
@@ -1235,7 +1229,7 @@ server.registerTool(
         }
       }
 
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
       const targetNodeId = `${rel.split(path.sep).join("/")}::${symbol}`;
       const impact = getChangeImpact(graph, targetNodeId);
 
@@ -1280,7 +1274,7 @@ server.registerTool(
   },
   async ({ path: input, function: funcName, scanDir }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is a directory. Provide a single file path.`);
       }
@@ -1292,7 +1286,7 @@ server.registerTool(
       const skeletons: SkeletonFile[] = [];
 
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch {
@@ -1300,7 +1294,7 @@ server.registerTool(
         }
       }
 
-      const result = await buildCallGraph(abs, funcName, ROOT, skeletons);
+      const result = await buildCallGraph(abs, funcName, root, skeletons);
 
       if (!result) {
         return errorText(
@@ -1345,11 +1339,11 @@ server.registerTool(
   },
   async ({ path: input, name, matchType, kind, exportedOnly }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. search_symbol requires a directory.`);
       }
-      const matches = await searchSymbols(abs, name, ROOT, { matchType, kind, exportedOnly });
+      const matches = await searchSymbols(abs, name, root, { matchType, kind, exportedOnly });
       return jsonText({
         directory: rel.split(path.sep).join("/"),
         pattern: name,
@@ -1382,7 +1376,7 @@ server.registerTool(
   },
   async ({ path: input, scanDir }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is a directory. Provide a single file path.`);
       }
@@ -1391,10 +1385,10 @@ server.registerTool(
       const files = collectSourceFiles(scanRoot, opts);
       const skeletons: SkeletonFile[] = [];
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
       }
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
       const fileId = rel.split(path.sep).join("/");
       const result = getFileDeps(graph, fileId);
       if (!result) {
@@ -1432,7 +1426,7 @@ server.registerTool(
   },
   async ({ path: input, limit }) => {
     try {
-      const { abs, rel } = resolveInRoot(input);
+      const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
         return errorText(`"${input}" is not a directory. get_top_symbols requires a directory.`);
       }
@@ -1440,10 +1434,10 @@ server.registerTool(
       const files = collectSourceFiles(abs, opts);
       const skeletons: SkeletonFile[] = [];
       for (const file of files) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
         try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
       }
-      const graph = buildSymbolGraph(skeletons, ROOT);
+      const graph = buildSymbolGraph(skeletons, root);
       const top = getTopSymbols(graph, limit ?? 10);
       return jsonText({
         directory: rel.split(path.sep).join("/"),
@@ -1549,7 +1543,10 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // stderr is safe for logging; stdout is reserved for the MCP protocol.
-  process.stderr.write(`universal-ast-mapper running. root=${ROOT}\n`);
+  process.stderr.write(
+    `universal-ast-mapper running. roots=${ROOTS.roots.join(path.delimiter)}` +
+      (ROOTS.unlocked ? " (UNLOCKED: any absolute path allowed)" : "") + "\n",
+  );
 }
 
 main().catch((err) => {

@@ -79,6 +79,20 @@ node dist/cli.js dead src/
 
 > `AST_MAP_ROOT` is the security boundary — the server only reads files inside this path.
 
+Since **v1.23.0** the boundary is configurable:
+
+- **Multi-root** — list several projects in `AST_MAP_ROOT`, separated by the OS path delimiter (`;` on Windows, `:` on macOS/Linux). The first root is the primary (relative paths resolve against it):
+
+```json
+      "env": { "AST_MAP_ROOT": "C:\\proj\\app;C:\\proj\\chem_sc_su" }
+```
+
+- **Unlocked** — set `AST_MAP_UNLOCKED: "1"` to let the server analyze **any absolute path** the client asks for (relative paths still resolve against the primary root). Use this for a personal "analyze anything" setup; keep it off for shared/untrusted environments:
+
+```json
+      "env": { "AST_MAP_ROOT": "C:\\proj\\app", "AST_MAP_UNLOCKED": "1" }
+```
+
 ---
 
 ## CLI Reference
@@ -787,6 +801,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.23.0** | **Configurable root boundary** — `AST_MAP_ROOT` accepts **multiple roots** (path-delimiter separated) and `AST_MAP_UNLOCKED=1` allows analyzing **any absolute path** on request (default stays locked). Analysis/graph/report rel-paths now computed against the matched root, so cross-root results are correct. New `roots` module + 13-check test suite. |
 | **1.22.0** | **PHP & Ruby support** — `.php` (classes, interfaces, traits, enums, methods with visibility, `use` imports incl. grouped, require/include) and `.rb`/`.rake` (classes, modules, methods, `self.` singleton methods, `private` section tracking, require/require_relative). Unblocked by upgrading `web-tree-sitter` 0.20.8 → 0.21.0 (all existing grammars re-verified). **16 languages**. |
 | **1.21.0** | **Quality gate** — `ast-map check` fails CI when quality regresses: **baseline ratchet** vs `.ast-map.baseline.json` (cycles · dead exports · SDP · very-high complexity · score; `--update-baseline` re-anchors) + absolute thresholds (flags or config `"check"`). New MCP tool `check_quality_gate` (**28 tools**); GitHub Action gains `mode: check`. |
 | **1.20.0** | **Incremental cache + parallel parsing** — persistent content-hash parse cache in `.ast-map/cache` (on by default, never stale, warm hits ~60× faster on large files; `ast-map cache stats|clear`, `AST_MAP_NO_CACHE`, `"cache": false`) + worker-thread **parallel parsing** for bulk scans (auto-sized, `AST_MAP_WORKERS` override, sequential fallback). |

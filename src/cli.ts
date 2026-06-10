@@ -30,7 +30,8 @@ import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import type { SkeletonFile } from "./types.js";
 
-const ROOT = path.resolve(process.env.AST_MAP_ROOT ?? process.cwd());
+import { parseRootsFromEnv } from "./roots.js";
+const ROOT = parseRootsFromEnv().roots[0]; // CLI is local — no boundary, primary root only
 
 // Persistent parse cache (disable with AST_MAP_NO_CACHE=1 or "cache": false in config).
 if (process.env.AST_MAP_NO_CACHE !== "1" && loadProjectConfig(ROOT).cache !== false) {
