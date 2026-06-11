@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**29 MCP tools / 31 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
+**29 MCP tools / 31 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
@@ -820,6 +820,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.26.0** | **Coupling overlay in the explorer** — `ast-map explore` gains a `color: coupling` mode: nodes shaded by **instability** I = Ce/(Ca+Ce) on a green (stable) → red (volatile) scale, with a legend, and Ca / Ce / I readouts in the hover tooltip and detail sidebar. Spot load-bearing files and volatile hotspots at a glance. |
 | **1.25.0** | **Semantic symbol search** — new MCP tool `semantic_search` + CLI `ast-map find <query>`: find symbols by *meaning* ("remove expired sessions" → `clearDiskCache`). Identifier tokenization + 60-group programming thesaurus + stemming + fuzzy matching + BM25-style IDF ranking over names, docs, signatures and paths. No embeddings, no network. (**29 tools / 31 commands**) |
 | **1.24.0** | **TS path-alias resolution** — bare imports like `@/components/Button` now resolve via the **nearest** `tsconfig.json`/`jsconfig.json` (`compilerOptions.paths` + `baseUrl`, relative `extends` chains, longest-prefix matching, string-aware JSONC parser). Wired into `resolve_imports`, the symbol graph, and the call graph — on a real Next.js app this took the import graph from 31 to **324 edges** and cut false dead-exports by ~30%. |
 | **1.23.0** | **Configurable root boundary** — `AST_MAP_ROOT` accepts **multiple roots** (path-delimiter separated) and `AST_MAP_UNLOCKED=1` allows analyzing **any absolute path** on request (default stays locked). Analysis/graph/report rel-paths now computed against the matched root, so cross-root results are correct. New `roots` module + 13-check test suite. |

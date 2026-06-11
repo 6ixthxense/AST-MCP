@@ -369,6 +369,23 @@ console.log("\n=== Symbol Search ===");
   const data = m ? JSON.parse(m[1]) : { nodes: [], links: [] };
   check("explorer nodes match graph files", data.nodes.length === graph.stats.fileCount);
   check("explorer has dependency links", data.links.length > 0);
+
+  // Coupling overlay (v1.26.0)
+  check("nodes carry coupling fields (ca/ce/inst)", data.nodes.every((n) => "ca" in n && "ce" in n && "inst" in n));
+  const utils = data.nodes.find((n) => n.id.endsWith("utils.ts"));
+  check(
+    "utils.ts is stable (Ca>0, I=0 — pure dependency target)",
+    utils && utils.ca > 0 && utils.ce === 0 && utils.inst === 0,
+    utils ? `ca=${utils.ca} ce=${utils.ce} inst=${utils.inst}` : "utils.ts not found",
+  );
+  const router = data.nodes.find((n) => n.id.endsWith("router.ts"));
+  check(
+    "router.ts is volatile (Ce>0, Ca=0, I=1)",
+    router && router.ce > 0 && router.ca === 0 && router.inst === 1,
+    router ? `ca=${router.ca} ce=${router.ce} inst=${router.inst}` : "router.ts not found",
+  );
+  check("has color-mode toggle (folder vs coupling)", html.includes('id="mode"') && html.includes("color: coupling"));
+  check("has instability legend + color scale", html.includes('id="leg"') && html.includes("instColor"));
 }
 
 // ─── Source Maps ──────────────────────────────────────────────────────────────

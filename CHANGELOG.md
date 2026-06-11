@@ -6,6 +6,18 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.26.0] — 2026-06-11 · Coupling overlay in the explorer
+- **`ast-map explore` color modes** — new toolbar dropdown: `color: folder`
+  (existing per-directory hues) or **`color: coupling`** — nodes shaded by
+  **instability** I = Ce/(Ca+Ce) on a green (0, stable) → yellow → red
+  (1, volatile) scale; orphan files stay gray.
+- **Legend** (bottom-left, shown in coupling mode) explains the scale; the hover
+  tooltip and the detail sidebar now show **Ca / Ce / I** per file.
+- Explorer nodes carry `ca` / `ce` / `inst` computed from the deduped file-level
+  import edges — same definition as `get_coupling` (Robert C. Martin metrics).
+- Still a single self-contained HTML file, dark-mode aware, zero dependencies.
+- Tests: +5 checks in `test/analysis.mjs` (144 total).
+
 ## [1.25.0] — 2026-06-11 · Semantic symbol search
 - **New MCP tool `semantic_search`** + **CLI `ast-map find <query> [dir]`** — find
   symbols by *meaning*, not exact name: "remove expired cache entries" →
