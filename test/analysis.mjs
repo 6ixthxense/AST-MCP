@@ -419,6 +419,27 @@ console.log("\n=== Symbol Search ===");
   check("report html shows the grade badge", html.includes(">" + data.grade + "<"));
   check("report html renders the module coupling card", html.includes("Module coupling"));
   check("report html renders the SDP card", html.includes("Layer violations"));
+
+  // Test-coverage card (v1.28.0)
+  check("report includes test-coverage data", data.testCoverage && typeof data.testCoverage.coverageRatio === "number");
+  check("report html renders the test-coverage card + stat tile", (html.match(/Test coverage/g) || []).length >= 2);
+
+  // Root fallback: report on src/ only — tests live under the root's tests/ dir.
+  const TM = path.join(__dirname, "fixtures", "testmap");
+  const tmReport = await buildReport(path.join(TM, "src"), TM);
+  check(
+    "root fallback pulls test files for a src-only report",
+    tmReport.testCoverage.rootFallback === true && tmReport.testCoverage.testFiles === 3,
+    `fallback=${tmReport.testCoverage.rootFallback} tests=${tmReport.testCoverage.testFiles}`,
+  );
+  check("src-only report coverage = 2/4", tmReport.testCoverage.coverageRatio === 0.5, `ratio=${tmReport.testCoverage.coverageRatio}`);
+  check(
+    "untested in report ranked by fan-in (core.ts first)",
+    tmReport.testCoverage.untested[0]?.file === "src/core.ts",
+    JSON.stringify(tmReport.testCoverage.untested),
+  );
+  const tmHtml = buildReportHtml(tmReport);
+  check("coverage card notes root fallback", tmHtml.includes("(from project root)"));
 }
 
 // ─── Git Diff & Risk ──────────────────────────────────────────────────────────

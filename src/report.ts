@@ -8,6 +8,7 @@ import type { FunctionComplexity } from "./complexity.js";
 import { findLayerViolations, type LayerViolation } from "./layers.js";
 import { computeModuleCoupling, type ModuleMetric } from "./modulecoupling.js";
 import type { SkeletonFile } from "./types.js";
+import { mapTestCoverage, isTestFile, isFixtureFile, type UntestedSource } from "./testmap.js";
 
 export interface ReportData {
   project: string;
@@ -24,6 +25,18 @@ export interface ReportData {
   complexity: { average: number; max: number; hotspots: (FunctionComplexity & { file: string })[] };
   layerViolations: { count: number; items: LayerViolation[] };
   modules: ModuleMetric[];
+  testCoverage: {
+    testFiles: number;
+    sourceFiles: number;
+    testedSources: number;
+    /** testedSources / sourceFiles (0–1). */
+    coverageRatio: number;
+    untestedCount: number;
+    /** Top untested sources, ranked by risk (fan-in, then symbols). */
+    untested: UntestedSource[];
+    /** True when test files were pulled in from the project root (scan dir had none). */
+    rootFallback: boolean;
+  };
 }
 
 function gradeFor(score: number): string {
@@ -70,6 +83,28 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   const layerViolations = findLayerViolations(graph);
   const modules = computeModuleCoupling(graph).modules;
 
+  // Test coverage. If the scanned dir has no test files (common when reporting
+  // on src/ only), pull test files in from the project root so the map can
+  // still pair them with the scanned sources.
+  let covGraph = graph;
+  let rootFallback = false;
+  if (!skeletons.some((s) => isTestFile(s.file)) && path.resolve(absDir) !== path.resolve(root)) {
+    const have = new Set(items.map((i) => i.abs));
+    const testItems = collectSourceFiles(root, opts)
+      .filter((f) => !have.has(f))
+      .map((f) => ({ abs: f, rel: path.relative(root, f).split(path.sep).join("/") }))
+      .filter((i) => isTestFile(i.rel) && !isFixtureFile(i.rel));
+    if (testItems.length > 0) {
+      const builtTests = await buildSkeletonsBulk(testItems, opts);
+      const testSkels = builtTests.filter((r) => r !== null).map((r) => r!.skel);
+      if (testSkels.length > 0) {
+        covGraph = buildSymbolGraph([...skeletons, ...testSkels], root);
+        rootFallback = true;
+      }
+    }
+  }
+  const cov = mapTestCoverage(covGraph);
+
   hotspots.sort((a, b) => b.complexity - a.complexity);
   const veryHigh = hotspots.filter((f) => f.complexity > 20).length;
   const high = hotspots.filter((f) => f.complexity > 10 && f.complexity <= 20).length;
@@ -81,6 +116,7 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   score -= Math.min(28, veryHigh * 4 + high * 1);
   score -= Math.min(12, god.filter((g) => g.importCount >= 8).length * 4);
   score -= Math.min(10, layerViolations.length);
+  score -= Math.min(8, Math.round((1 - cov.coverageRatio) * 8)); // structural test coverage
   score = Math.max(0, Math.round(score));
 
   const languages = [...langCount.entries()]
@@ -102,6 +138,15 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
     complexity: { average: cxN ? Math.round((cxSum / cxN) * 10) / 10 : 0, max: cxMax, hotspots: hotspots.slice(0, 12) },
     layerViolations: { count: layerViolations.length, items: layerViolations.slice(0, 12) },
     modules: modules.slice(0, 10),
+    testCoverage: {
+      testFiles: cov.testFiles,
+      sourceFiles: cov.sourceFiles,
+      testedSources: cov.testedSources,
+      coverageRatio: cov.coverageRatio,
+      untestedCount: cov.untestedSources,
+      untested: cov.untested.slice(0, 12),
+      rootFallback,
+    },
   };
 }
 
@@ -154,6 +199,20 @@ export function buildReportHtml(d: ReportData): string {
   const modules = d.modules.length
     ? d.modules.map((m) => bar(`${m.module}  ·  ${m.files} file(s)`, m.instability, 1, instColor(m.instability), `Ca ${m.afferent} · Ce ${m.efferent} · <b>I ${m.instability.toFixed(2)}</b>`)).join("")
     : `<div class="empty">No cross-module imports.</div>`;
+  const covPct = Math.round(d.testCoverage.coverageRatio * 100);
+  const covC = d.testCoverage.coverageRatio >= 0.7 ? "#1d9e75" : d.testCoverage.coverageRatio >= 0.4 ? "#ba7517" : "#e24b4a";
+  const covHead = d.testCoverage.testFiles > 0
+    ? bar(
+        `${d.testCoverage.testedSources}/${d.testCoverage.sourceFiles} sources tested · ${d.testCoverage.testFiles} test file(s)${d.testCoverage.rootFallback ? " (from project root)" : ""}`,
+        covPct, 100, covC, `<b>${covPct}%</b>`)
+    : "";
+  const covList = d.testCoverage.testFiles === 0
+    ? `<div class="empty">No test files found in the scanned directory or project root.</div>`
+    : d.testCoverage.untested.length === 0
+      ? `<div class="ok">✓ Every source file has at least one test</div>`
+      : d.testCoverage.untested.map((u) =>
+          `<div class="li"><span class="mono">${esc(u.file)}</span><span class="dim">${u.symbols} symbol(s)</span><span class="pill">Ca ${u.afferent}</span></div>`).join("")
+        + (d.testCoverage.untestedCount > d.testCoverage.untested.length ? `<div class="more">+${d.testCoverage.untestedCount - d.testCoverage.untested.length} more…</div>` : "");
   const sdp = d.layerViolations.count
     ? d.layerViolations.items.map((v) => `<div class="li"><span class="mono">${esc(v.from)}</span><span class="dim">→ ${esc(v.to)}</span><span class="pill" style="color:${instColor(0.9)}">+${v.severity.toFixed(2)}</span></div>`).join("")
       + (d.layerViolations.count > d.layerViolations.items.length ? `<div class="more">+${d.layerViolations.count - d.layerViolations.items.length} more…</div>` : "")
@@ -200,6 +259,7 @@ export function buildReportHtml(d: ReportData): string {
   ${statCard("Dead exports", d.dead.count, d.dead.count ? "#d85a30" : "#1d9e75")}
   ${statCard("Cycles", d.cycles.count, d.cycles.count ? "#e24b4a" : "#1d9e75")}
   ${statCard("SDP violations", d.layerViolations.count, d.layerViolations.count ? "#d85a30" : "#1d9e75")}
+  ${statCard("Test coverage", covPct + "%", covC)}
 </div>
 <div class="card"><h2>Language breakdown</h2>${langs}</div>
 <div class="card"><h2>Complexity hotspots</h2>${hotspots}</div>
@@ -211,6 +271,7 @@ export function buildReportHtml(d: ReportData): string {
   <div class="card"><h2>Module coupling (instability)</h2>${modules}</div>
   <div class="card"><h2>Layer violations (stable → volatile)</h2>${sdp}</div>
 </div>
+<div class="card"><h2>Test coverage (untested by risk)</h2>${covHead}${covList}</div>
 <div class="card"><h2>Dead exports (high confidence)</h2>${dead}</div>
 <div class="foot">Generated by AST-MCP · universal-ast-mapper</div>
 </div></body></html>`;

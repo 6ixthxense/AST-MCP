@@ -948,7 +948,8 @@ server.registerTool(
     description:
       "Scan a directory and return a one-shot health summary: file/symbol counts, language " +
       "breakdown, a health grade (A\u2013F) and score, complexity hotspots, god nodes (most-imported " +
-      "symbols), dead exports, and circular dependencies. The `ast-map report` CLI renders this as HTML.",
+      "symbols), dead exports, circular dependencies, module coupling, SDP violations, and structural " +
+      "test coverage (untested sources ranked by risk). The `ast-map report` CLI renders this as HTML.",
     inputSchema: {
       path: z.string().optional().describe("Directory to scan. Defaults to the project root."),
     },

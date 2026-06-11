@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**30 MCP tools / 32 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators, test-coverage mapping — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
+**30 MCP tools / 32 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators, test-coverage mapping — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** with test-coverage, coupling and SDP cards (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
@@ -835,6 +835,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.28.0** | **Test coverage in the dashboard** — `ast-map report` / `get_codebase_report` gain a **Test coverage** card (coverage bar + untested sources ranked by risk with Ca/symbols) and stat tile; structural coverage now factors into the health score (capped penalty). Reporting on `src/` only? Test files are **pulled in from the project root automatically**. |
 | **1.27.0** | **Test-coverage mapping** — new MCP tool `get_test_coverage` + CLI `ast-map tests` (alias `coverage`): pairs test files with the sources they exercise (import edges + naming conventions) and lists **untested sources ranked by risk** (fan-in, then symbols). Fixture dirs excluded; orphan tests reported. File-level, zero instrumentation. (**30 tools / 32 commands**) |
 | **1.26.0** | **Coupling overlay in the explorer** — `ast-map explore` gains a `color: coupling` mode: nodes shaded by **instability** I = Ce/(Ca+Ce) on a green (stable) → red (volatile) scale, with a legend, and Ca / Ce / I readouts in the hover tooltip and detail sidebar. Spot load-bearing files and volatile hotspots at a glance. |
 | **1.25.0** | **Semantic symbol search** — new MCP tool `semantic_search` + CLI `ast-map find <query>`: find symbols by *meaning* ("remove expired sessions" → `clearDiskCache`). Identifier tokenization + 60-group programming thesaurus + stemming + fuzzy matching + BM25-style IDF ranking over names, docs, signatures and paths. No embeddings, no network. (**29 tools / 31 commands**) |

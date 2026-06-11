@@ -6,6 +6,23 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.28.0] — 2026-06-11 · Test coverage in the dashboard
+- The health dashboard (`ast-map report` / `get_codebase_report`) now surfaces
+  v1.27's structural test coverage:
+  - **Test coverage card** — coverage bar (tested/total sources, % colored
+    green ≥ 70 / amber ≥ 40 / red below) + the **untested sources ranked by
+    risk** (fan-in Ca, then symbol count), capped at 12 with a "+N more" note.
+  - **Test coverage stat tile** in the header grid.
+- **Root fallback** — reporting on `src/` only (no test files in the scanned
+  dir)? Test files are pulled in from the project root automatically and the
+  card notes "(from project root)".
+- **Health score** now includes a structural-coverage penalty (capped at 8
+  points, proportional to the untested share).
+- `ReportData` gains `testCoverage` (testFiles, sourceFiles, testedSources,
+  coverageRatio, untestedCount, untested[], rootFallback) — additive.
+- CLI `ast-map report` summary line now shows `tests N%`.
+- Tests: +6 checks in `test/analysis.mjs` (159 total).
+
 ## [1.27.0] — 2026-06-11 · Test-coverage mapping
 - **New MCP tool `get_test_coverage`** + **CLI `ast-map tests [dir]`** (alias
   `coverage`) — structural test coverage with zero instrumentation: which source

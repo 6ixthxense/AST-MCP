@@ -686,7 +686,7 @@ program
     fs.writeFileSync(out, buildReportHtml(data), "utf8");
     header(`Code Health \u2014 ${rel}/  ${dim(`(${data.fileCount} files)`)}`);
     const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
-    console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max}`));
+    console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max} · tests ${Math.round(data.testCoverage.coverageRatio * 100)}%`));
     console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
     console.log();
   });
