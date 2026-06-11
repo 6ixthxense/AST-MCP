@@ -6,6 +6,23 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.24.0] — 2026-06-10 · TS path-alias resolution
+- Bare imports like `@/components/Button` now resolve through **`tsconfig.json` /
+  `jsconfig.json` `compilerOptions.paths`** (+ `baseUrl`): nearest-config lookup above
+  the importing file (monorepo-safe, per-process cached), relative `extends` chains
+  (child `paths` replace the parent's, per TS semantics), longest-prefix pattern
+  matching, candidate probing with the usual extension/index logic.
+- **String-aware JSONC parser** — comments/trailing commas are stripped with a
+  character walk, not regex (naive stripping corrupts Next.js configs where `"@/*"`
+  pairs with the `*/` inside `"**/*.ts"` include globs).
+- Wired into `resolve_imports` (aliased imports report `importKind: "relative"` +
+  resolved file), `build_symbol_graph` (alias edges before workspace-package fallback),
+  and the call graph (callee origin + reverse `calledBy`).
+- Real-world effect (Next.js app, 186 files): import graph 31 → **324 edges**;
+  dead exports 210 → 153; god nodes now reflect true usage.
+- New module `tsconfig` (`aliasCandidates`, `clearAliasCaches`) + `resolveAliasedImport`
+  in the resolver. Tests: new `test/tsalias-smoke.mjs` (15 checks), wired into `npm test`.
+
 ## [1.23.0] — 2026-06-10 · Configurable root boundary (multi-root + unlocked)
 - **`AST_MAP_ROOT` accepts multiple roots**, separated by the OS path delimiter
   (`;` Windows / `:` POSIX). The first root is primary; absolute paths inside any

@@ -5,7 +5,7 @@ import type { TSNode } from "./parser.js";
 import { buildSkeleton } from "./skeleton.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
 import { detectLanguage } from "./registry.js";
-import { resolveImportPath, getOrBuildCrossLangIndex } from "./resolver.js";
+import { resolveImportPath, resolveAliasedImport, getOrBuildCrossLangIndex } from "./resolver.js";
 import { resolveCrossLangTarget } from "./crosslang.js";
 import type { ImportRef, SkeletonFile } from "./types.js";
 
@@ -364,8 +364,13 @@ export async function buildCallGraph(
           call.calleeFileRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
         }
       } else {
-        call.isExternal = true;
-        call.calleeFileRel = importRef.from;
+        const aliasAbs = resolveAliasedImport(importRef.from, filePath);
+        if (aliasAbs) {
+          call.calleeFileRel = path.relative(root, aliasAbs).split(path.sep).join("/");
+        } else {
+          call.isExternal = true;
+          call.calleeFileRel = importRef.from;
+        }
       }
     } else if (aliasOrigin) {
       // Destructured aliases are TS/JS only (always relative or external).
@@ -375,8 +380,13 @@ export async function buildCallGraph(
           call.calleeFileRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
         }
       } else {
-        call.isExternal = true;
-        call.calleeFileRel = aliasOrigin;
+        const aliasAbs = resolveAliasedImport(aliasOrigin, filePath);
+        if (aliasAbs) {
+          call.calleeFileRel = path.relative(root, aliasAbs).split(path.sep).join("/");
+        } else {
+          call.isExternal = true;
+          call.calleeFileRel = aliasOrigin;
+        }
       }
     } else if (crossIndex && skel.language === "csharp") {
       // C# `using App.Models;` makes types visible without naming them.
@@ -423,8 +433,10 @@ export async function buildCallGraph(
             calledBy.push({ file: otherSkel.file });
             break;
           }
-        } else if (imp.from.startsWith(".")) {
-          const resolvedAbs = resolveImportPath(imp.from, otherAbs);
+        } else {
+          const resolvedAbs = imp.from.startsWith(".")
+            ? resolveImportPath(imp.from, otherAbs)
+            : resolveAliasedImport(imp.from, otherAbs);
           if (!resolvedAbs) continue;
           const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
           if (resolvedRel === relPath) {

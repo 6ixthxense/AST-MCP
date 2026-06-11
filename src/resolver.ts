@@ -10,6 +10,7 @@ import {
 } from "./crosslang.js";
 import type { ImportRef, SkeletonFile } from "./types.js";
 import { resolveWorkspaceImportCached } from "./workspace.js";
+import { aliasCandidates } from "./tsconfig.js";
 
 export interface ResolvedImport extends ImportRef {
   resolvedPath: string | null;
@@ -63,6 +64,11 @@ export function resolveImportPath(importFrom: string, fromAbs: string): string |
     }
   }
 
+  return probeCandidate(candidate);
+}
+
+/** Probe a path base: exact file → +extensions → /index.<ext>. */
+function probeCandidate(candidate: string): string | null {
   try {
     const stat = fs.statSync(candidate);
     if (stat.isFile()) return candidate;
@@ -75,6 +81,27 @@ export function resolveImportPath(importFrom: string, fromAbs: string): string |
   for (const ext of SRC_EXTS) {
     const p = path.join(candidate, `index${ext}`);
     if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Resolve a tsconfig/jsconfig path-aliased bare import (e.g. `@/components/X`
+ * with `"@/*": ["./src/*"]`) to an absolute file path, using the nearest
+ * config above the importing file. Returns null when not an alias.
+ */
+export function resolveAliasedImport(importFrom: string, fromAbs: string): string | null {
+  for (const base of aliasCandidates(importFrom, fromAbs)) {
+    const declaredExt = path.extname(base).toLowerCase();
+    if (declaredExt && JS_TO_TS[declaredExt]) {
+      const stem = base.slice(0, base.length - declaredExt.length);
+      for (const ext of JS_TO_TS[declaredExt]) {
+        const p = stem + ext;
+        if (fs.existsSync(p)) return p;
+      }
+    }
+    const hit = probeCandidate(base);
+    if (hit) return hit;
   }
   return null;
 }
@@ -157,6 +184,7 @@ async function enrichRelativeImport(
   const isBare = !imp.from.startsWith(".");
   // Relative import → path resolve; bare specifier → try monorepo workspace.
   let resolvedAbs = isBare ? null : resolveImportPath(imp.from, fromAbs);
+  if (!resolvedAbs && isBare) resolvedAbs = resolveAliasedImport(imp.from, fromAbs);
   if (!resolvedAbs && isBare) resolvedAbs = resolveWorkspaceImportCached(imp.from, root);
   const treatedExternal = isBare && !resolvedAbs;
   const resolvedRel = resolvedAbs
