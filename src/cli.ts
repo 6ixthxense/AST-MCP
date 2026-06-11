@@ -28,6 +28,7 @@ import { findLayerViolations } from "./layers.js";
 import { computeModuleCoupling } from "./modulecoupling.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
+import { semanticSearch } from "./semantic.js";
 import type { SkeletonFile } from "./types.js";
 
 import { parseRootsFromEnv } from "./roots.js";
@@ -1139,6 +1140,48 @@ program
       table(
         matches.map(m => [m.file, m.symbol, m.kind, m.exported ? green("✓") : dim("–")]),
         [["File", 40], ["Symbol", 30], ["Kind", 12], ["Exported", 8]],
+      );
+      console.log(`\n  ${matches.length} match(es)`);
+    }
+    console.log();
+  });
+
+// ─── Command: find (semantic search) ─────────────────────────────────────────
+
+program
+  .command("find <query> [dir]")
+  .description("Semantic symbol search — find symbols by meaning, not exact name")
+  .option("-l, --limit <n>", "Max results (default 20)", "20")
+  .option("-k, --kind <kind>", "Filter by kind: function, class, interface, type, method, const…")
+  .option("-e, --exported", "Only show exported symbols")
+  .option("--json", "Output as JSON")
+  .action(async (query: string, dir: string | undefined, opts: { limit?: string; kind?: string; exported?: boolean; json?: boolean }) => {
+    const searchDir = dir ?? ".";
+    const { abs, rel } = resolveArg(searchDir);
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const limit = Math.max(1, parseInt(opts.limit ?? "20", 10) || 20);
+    const matches = await semanticSearch(abs, query, ROOT, {
+      limit,
+      kind: opts.kind,
+      exportedOnly: opts.exported,
+    });
+
+    if (opts.json) return jsonOut({ directory: rel, query, matchCount: matches.length, matches });
+
+    header(`Semantic Search — ${bold(`"${query}"`)} in ${rel}/`);
+    if (matches.length === 0) {
+      console.log(indent(dim("No matches found.")));
+    } else {
+      table(
+        matches.map(m => [
+          m.score.toFixed(3),
+          m.file,
+          m.symbol,
+          m.kind,
+          m.matchedTerms.slice(0, 4).join(", "),
+        ]),
+        [["Score", 6], ["File", 34], ["Symbol", 26], ["Kind", 10], ["Matched", 30]],
       );
       console.log(`\n  ${matches.length} match(es)`);
     }

@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**28 MCP tools / 30 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
+**29 MCP tools / 31 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
@@ -127,6 +127,7 @@ ast-map modules   [dir]                          # directory-level coupling + ed
 ast-map cache     [stats|clear]                  # persistent parse cache (.ast-map/cache)
 ast-map check     [dir]            [--update-baseline] [--min-score N] [--max-cycles N] ...
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
+ast-map find     <query> [dir]     [-l N] [-k kind] [-e]   # semantic: by meaning
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
 ast-map impact   <file> <symbol>   [--scan <dir>]
@@ -154,6 +155,9 @@ ast-map validate src/ --max-lines 300 --max-imports 20
 
 # Find all symbols named like "handler" across the project
 ast-map search handler src/ --exported
+
+# Don't know the name? Search by meaning
+ast-map find "remove expired cache entries" src/
 
 # What does this file import / what imports it?
 ast-map deps src/lib/auth.ts --scan src/
@@ -514,6 +518,21 @@ Find symbols by name across all source files in a directory.
 
 ---
 
+### `semantic_search`
+Find symbols by **meaning**, not exact name — for when you know what the code *does* but not what it's called.
+
+No embeddings, no network: identifier tokenization (camelCase / snake_case / acronyms), a built-in programming thesaurus (`fetch≈get≈load`, `remove≈delete≈clear`, `unused≈dead`, …), light stemming, fuzzy matching, and BM25-style IDF ranking over symbol names, doc comments, signatures and file paths. Results carry a normalized `score` and `matchedTerms` explaining *why* each symbol matched.
+
+```
+semantic_search("find unused exported code") →
+  1.000  findDeadExports    (find, unused≈dead, export)
+  0.557  DeadExport         (unused≈dead, export)
+```
+
+**Params:** `path`, `query`, `limit` (default 20), `kind`, `exportedOnly`
+
+---
+
 ### `get_file_deps`
 For a single file, show what it imports and what imports it (with symbol names).  
 More focused than `build_symbol_graph` — use for quick dependency lookup.
@@ -801,6 +820,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.25.0** | **Semantic symbol search** — new MCP tool `semantic_search` + CLI `ast-map find <query>`: find symbols by *meaning* ("remove expired sessions" → `clearDiskCache`). Identifier tokenization + 60-group programming thesaurus + stemming + fuzzy matching + BM25-style IDF ranking over names, docs, signatures and paths. No embeddings, no network. (**29 tools / 31 commands**) |
 | **1.24.0** | **TS path-alias resolution** — bare imports like `@/components/Button` now resolve via the **nearest** `tsconfig.json`/`jsconfig.json` (`compilerOptions.paths` + `baseUrl`, relative `extends` chains, longest-prefix matching, string-aware JSONC parser). Wired into `resolve_imports`, the symbol graph, and the call graph — on a real Next.js app this took the import graph from 31 to **324 edges** and cut false dead-exports by ~30%. |
 | **1.23.0** | **Configurable root boundary** — `AST_MAP_ROOT` accepts **multiple roots** (path-delimiter separated) and `AST_MAP_UNLOCKED=1` allows analyzing **any absolute path** on request (default stays locked). Analysis/graph/report rel-paths now computed against the matched root, so cross-root results are correct. New `roots` module + 13-check test suite. |
 | **1.22.0** | **PHP & Ruby support** — `.php` (classes, interfaces, traits, enums, methods with visibility, `use` imports incl. grouped, require/include) and `.rb`/`.rake` (classes, modules, methods, `self.` singleton methods, `private` section tracking, require/require_relative). Unblocked by upgrading `web-tree-sitter` 0.20.8 → 0.21.0 (all existing grammars re-verified). **16 languages**. |
@@ -834,4 +854,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 | **0.9.0** | **Scoped type-flow tracing** — new `trace_type` MCP tool + `ast-map trace-type` (alias `flow`) CLI: follow a named type through function params, return types, typed variables, and class fields across a directory. Completes the deeper-analysis suite (dead code · cycles · impact · complexity · duplicates · unused params · type flow). **18 MCP tools**. |
 | **0.8.7** | **Python decorators in the call graph** — function/method symbols now carry a `decorators` field (`@router.get("/x")` → `router.get("/x")`), surfaced in skeletons (outline + full) and in `get_call_graph`. Traces framework wiring like FastAPI/Flask routes and `@staticmethod`/`@property` stacks to their handler. |
 | **0.8.6** | **Unused parameter detection** — new `find_unused_params` MCP tool + `ast-map unused-params` (alias `unused`) CLI: named functions whose params are never referenced. Skips `_`-prefixed/destructured/anonymous and treats object-shorthand as a use (low false-positive). Server now 17 tools. |
-| **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complex
+| **0.8.5** | **Cyclomatic complexity** — new `get_complexity` MCP tool + `ast-map complexity` (alias `cx`) CLI: per-function cyclomatic complexity with low/moderate/high/very-high ratings, file or directory scope. |
+| **0.8.4** | **Duplicate symbol detection** — `find_duplicate_symbols` / `ast-map duplicates` (alias `dupes`): symbol names exported from more than one file. |
+| **0.8.1–0.8.3** | Kotlin + C/C++ cross-file wiring · Swift module resolution (`Sources/<Module>/`) · TSX/React component props (`propsType` + `props[]`, `React.FC<P>` detection). |
+| **0.1.0–0.8.0** | Foundation: skeleton extraction (`get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture`) · import resolution + symbol graph · dead code / cycles / impact / call graph · CLI · 12 languages (+Rust · Java · C# · Go · C · C++ · Kotlin · Swift) · `/ast-map` skill auto-install · barrel re-exports · parse cache. |

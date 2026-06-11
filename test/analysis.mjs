@@ -520,6 +520,47 @@ console.log("\n=== Symbol Search ===");
   check("Svelte component wires an import edge to helpers.ts", imp.some((e) => e.includes("Widget.svelte->") && e.includes("helpers.ts")));
 }
 
+// ─── Semantic search ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Semantic Search ===");
+  const { semanticSearch, splitIdentifier, stem } = await import("../dist/semantic.js");
+
+  check(
+    "splitIdentifier: camelCase + acronym + digits",
+    JSON.stringify(splitIdentifier("getHTTPServerByID")) === JSON.stringify(["get", "http", "server", "by", "id"]) &&
+      JSON.stringify(splitIdentifier("parse_config-v2")) === JSON.stringify(["parse", "config", "v", "2"]),
+  );
+  check("stem folds plurals", stem("users") === "user" && stem("entries") === "entry");
+
+  const auth = await semanticSearch(GRAPH_DIR, "authenticate user", ROOT, { limit: 10 });
+  check(
+    "synonym query 'authenticate user' ranks login first",
+    auth.length > 0 && auth[0].symbol === "login",
+    `got: ${auth.map((m) => m.symbol).join(", ")}`,
+  );
+  check(
+    "matches expose matchedTerms + normalized score",
+    auth.length > 0 && auth[0].score === 1 && auth[0].matchedTerms.length > 0,
+  );
+  check(
+    "scores are sorted descending",
+    auth.every((m, i) => i === 0 || auth[i - 1].score >= m.score),
+  );
+
+  const direct = await semanticSearch(GRAPH_DIR, "logout", ROOT, { limit: 5 });
+  check("direct query 'logout' finds logout on top", direct.length > 0 && direct[0].symbol === "logout");
+
+  const kinds = await semanticSearch(GRAPH_DIR, "session", ROOT, { kind: "interface" });
+  check(
+    "kind filter returns only interfaces",
+    kinds.length > 0 && kinds.every((m) => m.kind === "interface") && kinds.some((m) => m.symbol === "Session"),
+    `got: ${kinds.map((m) => `${m.symbol}:${m.kind}`).join(", ")}`,
+  );
+
+  const none = await semanticSearch(GRAPH_DIR, "the of and", ROOT);
+  check("stopword-only query returns no matches", none.length === 0);
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

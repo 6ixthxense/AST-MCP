@@ -32,6 +32,7 @@ import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
+import { semanticSearch } from "./semantic.js";
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
@@ -1347,6 +1348,55 @@ server.registerTool(
       return jsonText({
         directory: rel.split(path.sep).join("/"),
         pattern: name,
+        matchCount: matches.length,
+        matches,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: semantic_search ─────────────────────── */
+server.registerTool(
+  "semantic_search",
+  {
+    title: "Search symbols by meaning",
+    description:
+      "Find symbols by *meaning*, not exact name. Tokenizes identifiers (camelCase/snake_case), " +
+      "expands programming synonyms (fetch≈get≈load, remove≈delete≈destroy, …), applies light " +
+      "stemming and fuzzy matching, and ranks with BM25-style IDF weighting over symbol names, " +
+      "doc comments, signatures and file paths.\n" +
+      'Use when you know what code *does* but not what it\'s called: "remove expired sessions", ' +
+      '"parse config file", "validate user input".',
+    inputSchema: {
+      path: z
+        .string()
+        .describe("Directory to search in, relative to project root or absolute within it."),
+      query: z
+        .string()
+        .describe('What the code does, e.g. "delete old cache entries" or "load user settings".'),
+      limit: z.number().int().min(1).max(100).optional().describe("Max results. Default 20."),
+      kind: z
+        .enum(["function", "class", "interface", "type", "method", "const", "var", "enum", "struct", "field"])
+        .optional()
+        .describe("Filter by symbol kind."),
+      exportedOnly: z
+        .boolean()
+        .optional()
+        .describe("Only return exported symbols. Default false."),
+    },
+  },
+  async ({ path: input, query, limit, kind, exportedOnly }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. semantic_search requires a directory.`);
+      }
+      const matches = await semanticSearch(abs, query, root, { limit, kind, exportedOnly });
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        query,
         matchCount: matches.length,
         matches,
       });

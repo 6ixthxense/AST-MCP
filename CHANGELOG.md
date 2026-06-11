@@ -6,6 +6,27 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.25.0] — 2026-06-11 · Semantic symbol search
+- **New MCP tool `semantic_search`** + **CLI `ast-map find <query> [dir]`** — find
+  symbols by *meaning*, not exact name: "remove expired cache entries" →
+  `clearDiskCache`, "find unused exported code" → `findDeadExports`.
+- Pure lexical semantics — **no embeddings, no network, no model downloads**:
+  - **Identifier tokenization**: camelCase / PascalCase / snake_case / kebab-case /
+    digit and acronym boundaries (`getHTTPServerByID` → `get http server by id`).
+  - **Programming thesaurus**: 60 synonym groups (`fetch≈get≈load≈retrieve`,
+    `remove≈delete≈clear`, `unused≈dead`, `auth≈login≈session`, …).
+  - **Light stemming** (plural/gerund/past: `users`→`user`) + **fuzzy matching**
+    (edit distance ≤ 1 on tokens ≥ 4 chars).
+  - **BM25-style ranking**: corpus IDF (rare tokens weigh more), field weights
+    (name 3× > doc 2× > signature 1.5× > path/kind 1×), match-type weights
+    (direct > synonym > fuzzy), coverage bonus, and length normalization so
+    focused names (`login`) outrank composites (`handleLogin`).
+- Results include a normalized `score` (0–1) and `matchedTerms` explaining each hit
+  (`unused≈dead` = synonym, `cach~cache` = fuzzy).
+- Options: `limit` (default 20), `kind` filter, `exportedOnly`.
+- New module `semantic` (`semanticSearch`, `splitIdentifier`, `stem`). Tests: +8
+  checks in `test/analysis.mjs` (139 total). **29 MCP tools / 31 CLI commands.**
+
 ## [1.24.0] — 2026-06-10 · TS path-alias resolution
 - Bare imports like `@/components/Button` now resolve through **`tsconfig.json` /
   `jsconfig.json` `compilerOptions.paths`** (+ `baseUrl`): nearest-config lookup above
@@ -232,4 +253,36 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
   declared in 2+ files.
 
 ## [0.8.3] — 2026-05-31 · TSX/React component props
-- Component s
+- Component symbols carry `propsType` + `props[]`; detects `React.FC<P>` and
+  JSX-returning PascalCase functions. MCP server version now read from package.json.
+
+## [0.8.2] — 2026-05-30 · Swift cross-file wiring
+- `import <Module>` → that module's files (`Sources/<Module>/`). Completes
+  cross-file graph/resolver support for all four v0.8.0 languages.
+
+## [0.8.1] — 2026-05-30 · Kotlin + C/C++ cross-file wiring
+- Kotlin FQCN/package index; C/C++ `#include` resolution with header↔impl pairing.
+- Fixes: parse-cache rel-path leak; Kotlin call-graph extraction.
+
+---
+
+## Earlier (pre-session history)
+
+- **0.8.0** — +4 languages: C · C++ · Kotlin · Swift (symbol extraction + imports).
+- **0.7.0** — Go full module resolution; C# reverse `calledBy`; 4-suite test harness.
+- **0.6.0** — +3 languages: Rust · Java · C#; cross-language resolver.
+- **0.5.x** — `/ast-map` skill auto-install; iterative DFS; barrel re-exports; parse cache; call-graph aliases; `.ast-map.config.json`.
+- **0.4.0** — `search_symbol`, `get_file_deps`, `get_top_symbols`, dead-code tiers.
+- **0.3.0** — CLI; `find_dead_code`, `find_circular_deps`, `get_change_impact`, `get_call_graph`.
+- **0.2.0** — import extraction; `resolve_imports`; `build_symbol_graph`.
+- **0.1.0** — `get_skeleton_json`, `generate_skeleton`, `get_symbol_context`, `validate_architecture`.
+
+[1.13.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.13.0
+[1.12.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.12.0
+[1.11.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.11.0
+[1.10.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.10.0
+[1.9.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.9.0
+[1.8.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.8.0
+[1.7.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.7.0
+[1.6.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.6.0
+[1.5.0]: https://github.com/6ixthxense/AST-MCP/releases/tag/v1.5.0
