@@ -29,6 +29,7 @@ import { computeModuleCoupling } from "./modulecoupling.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import { semanticSearch } from "./semantic.js";
+import { mapTestCoverage } from "./testmap.js";
 import type { SkeletonFile } from "./types.js";
 
 import { parseRootsFromEnv } from "./roots.js";
@@ -1184,6 +1185,56 @@ program
         [["Score", 6], ["File", 34], ["Symbol", 26], ["Kind", 10], ["Matched", 30]],
       );
       console.log(`\n  ${matches.length} match(es)`);
+    }
+    console.log();
+  });
+
+// ─── Command: tests (coverage map) ───────────────────────────────────────────
+
+program
+  .command("tests [dir]")
+  .alias("coverage")
+  .description("Map test files to the sources they cover; list untested sources")
+  .option("-u, --untested", "Only show untested source files")
+  .option("--links", "Show every test→source link")
+  .option("-n, --top <n>", "Max untested files to show", (v) => parseInt(v, 10), 25)
+  .option("--json", "Output as JSON")
+  .action(async (dir: string | undefined, opts: { untested?: boolean; links?: boolean; top: number; json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs);
+    const map = mapTestCoverage(buildSymbolGraph(skeletons, ROOT));
+
+    if (opts.json) return jsonOut({ directory: rel, ...map });
+
+    header(`Test Coverage — ${rel}/  ${dim(`(${map.testFiles} test files · ${map.sourceFiles} sources)`)}`);
+    const pct = Math.round(map.coverageRatio * 100);
+    const pcolor = pct >= 70 ? green : pct >= 40 ? yellow : red;
+    console.log(indent(`${bold("Covered:")} ${pcolor(`${map.testedSources}/${map.sourceFiles} (${pct}%)`)} of source files have at least one test`));
+
+    if (!opts.untested && opts.links && map.links.length > 0) {
+      console.log(`\n${indent(bold("Links:"))}`);
+      table(
+        map.links.map((l) => [l.via === "import" ? green(l.via) : yellow(l.via), l.test, "→ " + l.source]),
+        [["Via", 7], ["Test", 38], ["Source", 40]],
+      );
+    }
+
+    if (map.untested.length > 0) {
+      console.log(`\n${indent(`${bold("Untested sources")} ${dim("(by risk: fan-in, then symbols)")}`)}`);
+      table(
+        map.untested.slice(0, opts.top).map((u) => [String(u.afferent), String(u.symbols), u.file]),
+        [["Ca", 4], ["Syms", 5], ["File", 52]],
+      );
+      if (map.untested.length > opts.top) console.log(indent(dim(`… ${map.untested.length - opts.top} more (use -n)`)));
+    } else if (map.sourceFiles > 0) {
+      console.log(indent(green("✓ every source file has at least one test")));
+    }
+
+    if (!opts.untested && map.orphanTests.length > 0) {
+      console.log(`\n${indent(`${bold("Orphan tests")} ${dim("(no source matched — integration/e2e?)")}`)}`);
+      for (const t of map.orphanTests.slice(0, 10)) console.log(indent(dim(t), 4));
     }
     console.log();
   });

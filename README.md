@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**29 MCP tools / 31 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
+**30 MCP tools / 32 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators, test-coverage mapping — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
@@ -128,6 +128,7 @@ ast-map cache     [stats|clear]                  # persistent parse cache (.ast-
 ast-map check     [dir]            [--update-baseline] [--min-score N] [--max-cycles N] ...
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
 ast-map find     <query> [dir]     [-l N] [-k kind] [-e]   # semantic: by meaning
+ast-map tests    [dir]             [alias: coverage] [-u] [--links] [-n N]
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
 ast-map impact   <file> <symbol>   [--scan <dir>]
@@ -158,6 +159,9 @@ ast-map search handler src/ --exported
 
 # Don't know the name? Search by meaning
 ast-map find "remove expired cache entries" src/
+
+# Which source files have no tests at all?
+ast-map tests . --untested
 
 # What does this file import / what imports it?
 ast-map deps src/lib/auth.ts --scan src/
@@ -533,6 +537,17 @@ semantic_search("find unused exported code") →
 
 ---
 
+### `get_test_coverage`
+Structural test coverage: pair test files with the source files they exercise, and list source files **no test touches** — no instrumentation or test runner needed, works on a cold checkout.
+
+Two signals: a test file *importing* a source file (definitive), and naming conventions (`auth.test.ts` → `auth.ts`, `test_utils.py` → `utils.py`, `FooTest.java` → `Foo.java`, `test/<name>.*` → `<name>.*`). Fixture/mock directories are excluded from both sides. Untested files are ranked by risk (fan-in, then symbol count); unmatched test files are reported as `orphanTests` (usually integration/e2e).
+
+> File-level coverage ("does anything test this file?"), not line coverage.
+
+**Params:** `path`, `untestedOnly`
+
+---
+
 ### `get_file_deps`
 For a single file, show what it imports and what imports it (with symbol names).  
 More focused than `build_symbol_graph` — use for quick dependency lookup.
@@ -820,6 +835,7 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **1.27.0** | **Test-coverage mapping** — new MCP tool `get_test_coverage` + CLI `ast-map tests` (alias `coverage`): pairs test files with the sources they exercise (import edges + naming conventions) and lists **untested sources ranked by risk** (fan-in, then symbols). Fixture dirs excluded; orphan tests reported. File-level, zero instrumentation. (**30 tools / 32 commands**) |
 | **1.26.0** | **Coupling overlay in the explorer** — `ast-map explore` gains a `color: coupling` mode: nodes shaded by **instability** I = Ce/(Ca+Ce) on a green (stable) → red (volatile) scale, with a legend, and Ca / Ce / I readouts in the hover tooltip and detail sidebar. Spot load-bearing files and volatile hotspots at a glance. |
 | **1.25.0** | **Semantic symbol search** — new MCP tool `semantic_search` + CLI `ast-map find <query>`: find symbols by *meaning* ("remove expired sessions" → `clearDiskCache`). Identifier tokenization + 60-group programming thesaurus + stemming + fuzzy matching + BM25-style IDF ranking over names, docs, signatures and paths. No embeddings, no network. (**29 tools / 31 commands**) |
 | **1.24.0** | **TS path-alias resolution** — bare imports like `@/components/Button` now resolve via the **nearest** `tsconfig.json`/`jsconfig.json` (`compilerOptions.paths` + `baseUrl`, relative `extends` chains, longest-prefix matching, string-aware JSONC parser). Wired into `resolve_imports`, the symbol graph, and the call graph — on a real Next.js app this took the import graph from 31 to **324 edges** and cut false dead-exports by ~30%. |

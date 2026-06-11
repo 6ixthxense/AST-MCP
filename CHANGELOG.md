@@ -6,6 +6,27 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.27.0] — 2026-06-11 · Test-coverage mapping
+- **New MCP tool `get_test_coverage`** + **CLI `ast-map tests [dir]`** (alias
+  `coverage`) — structural test coverage with zero instrumentation: which source
+  files have tests at all, and which have **none**.
+- Two pairing signals:
+  - **import** — a test file imports the source file (graph edge; definitive).
+  - **name** — conventions: `auth.test.ts` → `auth.ts`, `auth_test.go`,
+    `test_utils.py` → `utils.py`, `AuthTest.java` → `Auth.java`,
+    `foo-smoke.mjs` → `foo.*`, and bare `test/<name>.*` → `<name>.*`;
+    ambiguity resolved by longest shared path prefix.
+- Test files detected by directory (`test/`, `tests/`, `__tests__/`, `spec/`, `e2e/`)
+  or basename pattern; **fixtures/mocks/testdata dirs excluded from both sides**.
+- Output: coverage ratio, test→source `links` (with `via`), `tested`,
+  **`untested` ranked by risk** (fan-in Ca, then symbol count — load-bearing
+  files with no tests first), and `orphanTests` (no source matched; usually
+  integration/e2e).
+- CLI: `-u/--untested`, `--links`, `-n/--top`, `--json`.
+- New module `testmap` (`mapTestCoverage`, `isTestFile`, `testNameTarget`,
+  `isFixtureFile`) + `test/fixtures/testmap/` fixture tree. Tests: +9 checks
+  in `test/analysis.mjs` (153 total). **30 MCP tools / 32 CLI commands.**
+
 ## [1.26.0] — 2026-06-11 · Coupling overlay in the explorer
 - **`ast-map explore` color modes** — new toolbar dropdown: `color: folder`
   (existing per-directory hues) or **`color: coupling`** — nodes shaded by

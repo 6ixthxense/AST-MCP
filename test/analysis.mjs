@@ -578,6 +578,57 @@ console.log("\n=== Symbol Search ===");
   check("stopword-only query returns no matches", none.length === 0);
 }
 
+// ─── Test-coverage mapping ────────────────────────────────────────────────────
+{
+  console.log("\n=== Test-Coverage Mapping ===");
+  const { mapTestCoverage, isTestFile, testNameTarget, isFixtureFile } = await import("../dist/testmap.js");
+
+  check(
+    "isTestFile: suffix + dir + go conventions",
+    isTestFile("src/auth.test.ts") && isTestFile("test/foo.mjs") && isTestFile("pkg/auth_test.go") && !isTestFile("src/auth.ts"),
+  );
+  check(
+    "testNameTarget: ts/py/java conventions",
+    testNameTarget("a/auth.test.ts") === "auth" &&
+      testNameTarget("t/test_utils.py") === "utils" &&
+      testNameTarget("x/AuthTest.java") === "Auth" &&
+      testNameTarget("test/smoke.mjs") === null,
+  );
+  check("isFixtureFile detects fixtures dirs", isFixtureFile("tests/fixtures/data.ts") && !isFixtureFile("tests/data.ts"));
+
+  const TM_DIR = path.join(__dirname, "fixtures", "testmap");
+  const tmOpts = resolveOptions({ detail: "outline", emitHtml: false });
+  const tmSkels = [];
+  for (const f of collectSourceFiles(TM_DIR, tmOpts)) {
+    const rel = path.relative(TM_DIR, f).split(path.sep).join("/");
+    tmSkels.push(await buildSkeleton(f, rel, tmOpts));
+  }
+  const map = mapTestCoverage(buildSymbolGraph(tmSkels, TM_DIR));
+
+  check(
+    "counts: 3 tests / 4 sources / 1 fixture",
+    map.testFiles === 3 && map.sourceFiles === 4 && map.fixtureFiles === 1,
+    `tests=${map.testFiles} sources=${map.sourceFiles} fixtures=${map.fixtureFiles}`,
+  );
+  check(
+    "import link: mylib.test.ts → mylib.ts",
+    map.links.some((l) => l.test === "tests/mylib.test.ts" && l.source === "src/mylib.ts" && l.via === "import"),
+    JSON.stringify(map.links),
+  );
+  check(
+    "name link: util.spec.ts → util.ts (no import needed)",
+    map.links.some((l) => l.test === "tests/util.spec.ts" && l.source === "src/util.ts" && l.via === "name"),
+  );
+  check("coverage ratio 2/4 = 0.5", map.coverageRatio === 0.5, `ratio=${map.coverageRatio}`);
+  check(
+    "untested ranked by fan-in: core.ts (Ca=2) before orphanmod.ts",
+    map.untested.length === 2 && map.untested[0].file === "src/core.ts" && map.untested[0].afferent === 2 &&
+      map.untested[1].file === "src/orphanmod.ts",
+    JSON.stringify(map.untested),
+  );
+  check("orphan test detected (e2e-flow)", map.orphanTests.length === 1 && map.orphanTests[0] === "tests/e2e-flow.test.ts");
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

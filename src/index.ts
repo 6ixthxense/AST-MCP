@@ -33,6 +33,7 @@ import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTop
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import { semanticSearch } from "./semantic.js";
+import { mapTestCoverage } from "./testmap.js";
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
 import { traceTypeInFile } from "./typeflow.js";
@@ -1400,6 +1401,47 @@ server.registerTool(
         matchCount: matches.length,
         matches,
       });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
+/* ─────────────────── tool: get_test_coverage ───────────────────────────── */
+server.registerTool(
+  "get_test_coverage",
+  {
+    title: "Test-coverage map (tests ↔ sources)",
+    description:
+      "Structural test coverage: pair test files with the source files they exercise and list " +
+      "source files no test touches. Two signals: a test file *importing* a source file " +
+      "(definitive) and naming conventions (auth.test.ts → auth.ts, test_utils.py → utils.py). " +
+      "No instrumentation or test runner needed. Untested files are ranked by risk " +
+      "(fan-in, then symbol count). This is file-level coverage, not line coverage.",
+    inputSchema: {
+      path: z.string().optional().describe("Directory to scan (should include the test files). Default project root."),
+      untestedOnly: z.boolean().optional().describe("Return only the untested-sources list. Default false."),
+    },
+  },
+  async ({ path: input, untestedOnly }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText(`"${input}" is not a directory. get_test_coverage requires a directory.`);
+      }
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(root, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const map = mapTestCoverage(buildSymbolGraph(skels, root));
+      const dir = rel.split(path.sep).join("/") || ".";
+      if (untestedOnly) {
+        return jsonText({ directory: dir, untestedSources: map.untestedSources, coverageRatio: map.coverageRatio, untested: map.untested });
+      }
+      return jsonText({ directory: dir, ...map });
     } catch (err) {
       return errorText(describeError(err));
     }
