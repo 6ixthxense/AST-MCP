@@ -6,6 +6,41 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.30.0] — 2026-06-16 · Graph explorer phase 2 — analysis overlays
+
+### Graph / Explorer (`buildExplorerHtml`)
+- **Circular dependency highlight** — edges that form cycles are drawn in red;
+  cycle membership is detected via DFS back-edges in `deriveFileGraph` and
+  injected into `DATA.cycles`. The detail panel shows a warning badge when the
+  selected file participates in one or more cycles. Tooltip also flags cycle nodes.
+- **Dead code marking** — files with Ce > 0 (they import others) but Ca = 0
+  (nothing imports them) are marked with a dashed ring; a `⊘ No dependents`
+  badge appears in the detail panel, and the tooltip shows `⊘ dead?`.
+- **SDP violation overlay** — edges where the source is more stable than the
+  target (instability delta > 0.25) are drawn in purple; counted in the detail
+  panel as "⚡ N SDP violation(s) — stable depending on volatile".
+- **Convex hull per folder** — in group mode, a semi-transparent filled polygon
+  (gift-wrapping algorithm) is drawn behind each folder's nodes. The folder label
+  appears above the hull. Hulls update live as the simulation settles.
+- **Focus mode** — toolbar button (⊙ focus) or `x` key toggles focus mode.
+  When a node is selected, all non-adjacent nodes and edges are hard-hidden,
+  leaving only the selected node and its direct dependencies/dependents visible.
+- **Export PNG / SVG** — two toolbar buttons (↓ PNG via `canvas.toDataURL`,
+  ↓ SVG as a Blob with nodes as `<circle>` + edge `<line>` elements). Keyboard
+  shortcut `p` exports PNG. Cycle edges and SDP violations are colour-coded in
+  the SVG output too.
+- **Permalink / hash state** — selecting a node updates `location.hash` with the
+  URL-encoded node ID (`location.replace` to avoid browser history pollution).
+  Loading the page with a matching hash auto-selects and centres that node after
+  800 ms (letting the simulation settle first).
+- **Back / forward navigation** — the detail panel header now has ← → buttons
+  that navigate through the in-session selection history. `[` / `]` keys do the
+  same from the keyboard. `syncNav()` keeps buttons disabled at history boundaries.
+- Panel header redesigned to flex row containing ← → close buttons; removed
+  `position:absolute` on the close button in favour of `margin-left:auto`.
+- `#sleg` legend row at bottom-left combines visual indicator key (↺ cycle,
+  ⚡ SDP, ⊘ dead?) with keyboard shortcut hints, replacing the old `#keys` div.
+
 ## [1.29.0] — 2026-06-16 · Graph explorer UI upgrade
 
 ### Graph / Explorer (`buildExplorerHtml`)
