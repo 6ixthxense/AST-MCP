@@ -6,6 +6,40 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.29.0] — 2026-06-16 · Graph explorer UI upgrade
+
+### Graph / Explorer (`buildExplorerHtml`)
+- **Directed arrowheads on edges** — each import edge now has an arrowhead at
+  the target node so dependency direction is immediately visible at a glance.
+- **Zoom-adaptive labels** — node names appear for all nodes when zoomed in
+  (k > 1.4), for symbol-rich nodes at mid-zoom (k > 0.7, symbols ≥ 8), and
+  always for the largest nodes (≥ 14 symbols); previously only selected/hovered
+  or 14+ nodes were labelled.
+- **Coupling metric bars** — the detail panel now shows Ca, Ce, and I
+  (instability) as visual progress bars with colour coding (green = stable,
+  amber = mixed, red = volatile) instead of plain text numbers.
+- **Instability ring** — nodes with I ≥ 0.8 (highly volatile) get a subtle red
+  ring in the default "folder" colour mode so hotspots are visible at a glance
+  without switching to coupling mode.
+- **Node pinning** — double-click a node to pin it in place (stops simulation
+  moving it); a small pink dot appears above pinned nodes.  Double-click again
+  to unpin.  Double-click on empty canvas still resets view.
+- **Keyboard shortcuts** — `Esc` deselects and clears the search filter,
+  `/` or `f` focuses the search input, `F` / `Home` fits the view, `d` toggles
+  the debug overlay.
+- **Fit button** — a ⊞ fit button in the toolbar provides a one-click way to
+  re-centre the graph (same as pressing `F`).
+- **Pinch-to-zoom** — touch events wired up for mobile / tablet use.
+- **Richer tooltip** — hover tooltip now shows Ca, Ce, I values and a "📌
+  pinned" indicator; rendered as HTML for multi-line layout.
+- **Edge hover highlight** — edges touching the hovered node are drawn at
+  50 % opacity (vs. 15 % for the rest), making neighbourhood relationships
+  visible without clicking.
+- **Debug overlay hidden by default** — `#dbg` div starts hidden; toggle with
+  `d`.
+
+---
+
 ## [1.28.0] — 2026-06-11 · Test coverage in the dashboard
 - The health dashboard (`ast-map report` / `get_codebase_report`) now surfaces
   v1.27's structural test coverage:
