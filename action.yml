@@ -48,7 +48,7 @@ runs:
       if: ${{ inputs.mode == 'validate' || inputs.mode == 'both' }}
       shell: bash
       run: >
-        npx -y -p universal-ast-mapper@${{ inputs.version }} ast-map validate "${{ inputs.path }}"
+        npm exec --package=universal-ast-mapper@${{ inputs.version }} --yes -- ast-map validate "${{ inputs.path }}"
         --max-lines ${{ inputs.max-lines }}
         --max-imports ${{ inputs.max-imports }}
         --max-exports ${{ inputs.max-exports }}
@@ -57,7 +57,7 @@ runs:
       if: ${{ inputs.mode == 'check' || inputs.mode == 'both' }}
       shell: bash
       run: >
-        npx -y -p universal-ast-mapper@${{ inputs.version }} ast-map check "${{ inputs.path }}"
+        npm exec --package=universal-ast-mapper@${{ inputs.version }} --yes -- ast-map check "${{ inputs.path }}"
         ${{ inputs.check-args }}
 
     - name: Generate health report JSON (pr-comment)
@@ -65,14 +65,14 @@ runs:
       shell: bash
       id: ast_report
       run: |
-        npx -y -p universal-ast-mapper@${{ inputs.version }} \
+        npm exec --package=universal-ast-mapper@${{ inputs.version }} --yes -- \
           ast-map report "${{ inputs.path }}" --json > /tmp/ast-report-head.json 2>/dev/null || echo '{}' > /tmp/ast-report-head.json
 
         # If the baseline file exists, run report on base branch too
         if git rev-parse origin/${{ github.base_ref }} >/dev/null 2>&1; then
           git stash -q 2>/dev/null || true
           git checkout -q origin/${{ github.base_ref }} -- "${{ inputs.path }}" 2>/dev/null || true
-          npx -y -p universal-ast-mapper@${{ inputs.version }} \
+          npm exec --package=universal-ast-mapper@${{ inputs.version }} --yes -- \
             ast-map report "${{ inputs.path }}" --json > /tmp/ast-report-base.json 2>/dev/null || echo '{}' > /tmp/ast-report-base.json
           git checkout -q HEAD -- "${{ inputs.path }}" 2>/dev/null || true
           git stash pop -q 2>/dev/null || true
