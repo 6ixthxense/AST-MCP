@@ -6,6 +6,94 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.35.0] — 2026-06-20 · explain, similar, incremental, coverage merge, plugins, web UI
+
+### New CLI commands
+- `ast-map explain <file> <symbol>` — structural explanation of any symbol: purpose, callers, deps, smells, change risk; `--ai` adds Claude prose explanation
+- `ast-map similar [dir]` — find structurally similar/duplicate functions via AST fingerprinting (no AI)
+- `ast-map serve [dir]` — interactive web SPA at `http://localhost:7337` — dark theme dashboard, D3 dependency graph, all analysis pages
+- `ast-map covmerge <report>` — merge structural coverage map with actual Istanbul/lcov/Clover/Cobertura report
+- `ast-map plugins [dir]` — run custom JS lint plugins from `.ast-map/plugins/`
+- `--changed-since <ref>` flag on `smells` and `security` — incremental analysis via git diff
+
+### New MCP tools (4 added)
+- `explain_symbol` — structural + optional AI explanation of any symbol
+- `find_similar` — AST fingerprint groups across a directory
+- `merge_coverage` — Istanbul/lcov/Clover/Cobertura report merged with structural map
+- `run_plugins` — load and run `.ast-map/plugins/*.mjs` custom rules
+
+### New source modules
+- `src/explain.ts` — `buildExplainResult()` + `aiExplain()` (Claude via node:https)
+- `src/similar.ts` — `findSimilar()` with 7-component structural fingerprint
+- `src/incremental.ts` — content-hash state + `filterToGitChanged()` + `detectChanges()`
+- `src/covmerge.ts` — 4-format coverage parser + `mergeCoverage()` merger
+- `src/plugins.ts` — `loadPlugins()` / `runPlugins()` / `EXAMPLE_PLUGIN` scaffold
+- `src/serve.ts` — `startServe()` HTTP server with 10 REST endpoints + 5 s cache
+- `src/webapp.ts` — self-contained SPA template (D3.js from CDN, dark theme, 8 pages)
+
+### Other changes
+- `ast-map init` now scaffolds `.ast-map/plugins/example.mjs` alongside the config
+- 296 tests (up from 242), 0 failures
+
+## [1.34.0] — 2026-06-20 · MCP tools, AI refactor, LSP server, PR comments, ast-map init
+
+### New MCP tools (7 added)
+- `detect_code_smells` — scan file/dir for 6 smell patterns; returns structured list
+- `scan_security` — static scan with 12 rules; filterable by `min_severity`
+- `generate_diagram` — Mermaid class/deps/modules diagram from any directory
+- `get_fix_suggestions` — prioritised fix suggestions (P1–P3) from dead exports + smells + security
+- `generate_tests` — test stubs for a single file (all 6 frameworks)
+- `generate_tests_ai` — AI-enhanced tests via Claude API; falls back to stubs gracefully
+- `ai_refactor` — sends smells/security to Claude; returns before/after code + explanation
+
+### AI refactor (`src/ai-refactor.ts`)
+- `ast-map fix --ai` — sends detected issues to Claude and returns concrete refactored code
+- Structured `<before>/<after>/<explanation>` XML response format
+- `aiRefactorBatch()` runs one API call per issue; failures degrade gracefully with `error` field
+- `--limit <n>` caps API calls per run (default 3)
+
+### LSP server (`src/lsp.ts`, binary `ast-map-lsp`)
+- Full JSON-RPC 2.0 over stdio — no external LSP library, zero new npm deps
+- `textDocument/publishDiagnostics` — dead exports (Warning), security issues (Error/Warning), smells (Warning/Information)
+- `textDocument/codeLens` — cyclomatic complexity above every function/class (🔴 ≥20, 🟡 ≥10)
+- VS Code extension updated to start LSP client (`vscode-languageclient`) on activation, falling back to on-save polling
+
+### GitHub Actions PR comment (`action.yml`)
+- New `mode: pr-comment` — posts/updates a health score comment on every PR
+- Shows: score with delta (↑/↓/→), grade, files/symbols/dead/cycles/complexity/coverage table
+- `github-token` input; automatically updates existing comment rather than posting duplicates
+
+### `ast-map init` (new CLI command)
+- Interactive wizard (readline) or `--defaults` for non-interactive
+- Writes `.ast-map.json` with thresholds, smell limits, security min-severity, ignore patterns
+- `--json` flag emits defaults without writing any file
+
+### Tests
+- `test/analysis.mjs` — +10 checks (AI refactor + LSP file existence); 242 total, 0 failed
+
+## [1.33.0] — 2026-06-20 · AI testgen + VS Code extension
+
+### AI-powered test generation (`src/ai-testgen.ts`)
+- New `--ai` flag for `ast-map testgen` — sends source code + generated stubs to Claude API and
+  returns tests with **real assertions** instead of TODO placeholders.
+- Uses `node:https` (no new npm dep) to call `POST /v1/messages` on `api.anthropic.com`.
+- Auto-reads `ANTHROPIC_API_KEY`; `--api-key` and `--model` flags override per invocation.
+- `tryAiEnhanceTests()` never throws — falls back silently to stubs when key is absent.
+- Terminal output appended with `[AI]` tag; JSON output includes `aiEnhanced: boolean`.
+
+### VS Code Extension (`vscode-ext/`)
+- New standalone VS Code extension project (`@ast-map/vscode`):
+  - **Complexity Code Lens** — cyclomatic score shown above every function/class; yellow ≥10, red ≥20.
+  - **Dead-export diagnostics** — high-confidence dead exports underlined as `Warning`.
+  - **Security diagnostics** — critical/high issues shown as `Error`, medium/low as `Warning`.
+  - **Issues Tree View** — sidebar panel listing smells and security issues across the workspace.
+  - **Commands**: Generate Tests, Generate Tests (AI), Run Smells, Scan Security, Show Diagram, Open Report.
+  - **Status Bar** — shows live health score `AST B 82`; opens report on click.
+  - Configuration: `astMap.cliPath`, `astMap.enableCodeLens`, `astMap.enableDiagnostics`, `astMap.anthropicApiKey`.
+
+### Tests
+- `test/analysis.mjs` — +9 checks for `ai-testgen.ts` (graceful fallback, shape, 232 total, 0 failed).
+
 ## [1.28.0] — 2026-06-11 · Test coverage in the dashboard
 - The health dashboard (`ast-map report` / `get_codebase_report`) now surfaces
   v1.27's structural test coverage:

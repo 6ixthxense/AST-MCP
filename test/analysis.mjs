@@ -650,6 +650,540 @@ console.log("\n=== Symbol Search ===");
   check("orphan test detected (e2e-flow)", map.orphanTests.length === 1 && map.orphanTests[0] === "tests/e2e-flow.test.ts");
 }
 
+// ─── Test Generation ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Test Generation ===");
+  const { generateTestFile, detectTestFramework, resolveTestPath } = await import("../dist/testgen.js");
+
+  // Framework detection from project root (which has no jest/vitest → node)
+  const fw = detectTestFramework(ROOT);
+  check("detectTestFramework returns a valid framework", ["vitest","jest","mocha","node"].includes(fw));
+
+  // resolveTestPath
+  check("resolveTestPath ts → *.test.ts", resolveTestPath("/p/src/utils.ts", "typescript").endsWith("utils.test.ts"));
+  check("resolveTestPath js → *.test.js", resolveTestPath("/p/src/utils.js", "javascript").endsWith("utils.test.js"));
+  check("resolveTestPath py → test_*.py", resolveTestPath("/p/utils.py", "python").endsWith("test_utils.py"));
+  check("resolveTestPath go → *_test.go", resolveTestPath("/p/utils.go", "go").endsWith("utils_test.go"));
+  check("resolveTestPath java → *Test.java", resolveTestPath("/p/Utils.java", "java").endsWith("UtilsTest.java"));
+
+  // Build a full skeleton for sample.ts
+  const SAMPLE_TS = path.join(__dirname, "fixtures", "sample.ts");
+  const skelOpts = resolveOptions({ detail: "full", emitHtml: false });
+  const skel = await buildSkeleton(SAMPLE_TS, "sample.ts", skelOpts);
+
+  // node:test framework
+  const nodeResult = generateTestFile(skel, SAMPLE_TS, { framework: "node" });
+  check("testgen: node:test imports node:test", nodeResult.content.includes("node:test"));
+  check("testgen: node:test imports assert", nodeResult.content.includes("node:assert"));
+  check("testgen: imports source module", nodeResult.content.includes("from './sample'"));
+  check("testgen: class UserService gets describe block", nodeResult.content.includes("describe('UserService'"));
+  check("testgen: async method getUser gets async it", nodeResult.content.includes("async () => {") && nodeResult.content.includes("getUser"));
+  check("testgen: function helper gets describe block", nodeResult.content.includes("describe('helper'"));
+  check("testgen: exported const double gets describe block", nodeResult.content.includes("describe('double'"));
+  check("testgen: type-only interface exported separately", nodeResult.content.includes("import type {") && nodeResult.content.includes("Repository"));
+  check("testgen: testCount > 0", nodeResult.testCount > 0);
+
+  // vitest framework
+  const vitestResult = generateTestFile(skel, SAMPLE_TS, { framework: "vitest" });
+  check("testgen vitest: imports from vitest", vitestResult.content.includes("from 'vitest'"));
+  check("testgen vitest: expect().toBeDefined used", vitestResult.content.includes("toBeDefined"));
+
+  // jest framework
+  const jestResult = generateTestFile(skel, SAMPLE_TS, { framework: "jest" });
+  check("testgen jest: imports from @jest/globals", jestResult.content.includes("@jest/globals"));
+
+  // exported-only filter (default): multiply is not exported → should not appear
+  check("testgen: non-exported multiply not included", !nodeResult.content.includes("describe('multiply'"));
+  // with --all: multiply appears
+  const allResult = generateTestFile(skel, SAMPLE_TS, { framework: "node", exportedOnly: false });
+  check("testgen --all: non-exported multiply included", allResult.content.includes("multiply"));
+
+  // Python
+  const SAMPLE_PY = path.join(__dirname, "fixtures", "sample.py");
+  const skelPy = await buildSkeleton(SAMPLE_PY, "sample.py", skelOpts);
+  const pyResult = generateTestFile(skelPy, SAMPLE_PY, { framework: "pytest" });
+  check("testgen python: imports pytest", pyResult.content.includes("import pytest"));
+  check("testgen python: test_ prefix for functions", pyResult.content.includes("def test_"));
+  check("testgen python: Test class for classes", pyResult.content.includes("class TestInventoryService"));
+  check("testgen python: testCount > 0", pyResult.testCount > 0);
+
+  // Go
+  const SAMPLE_GO = path.join(__dirname, "fixtures", "services", "inventory.go");
+  const skelGo = await buildSkeleton(SAMPLE_GO, "services/inventory.go", skelOpts);
+  const goResult = generateTestFile(skelGo, SAMPLE_GO, { framework: "gotest" });
+  check("testgen go: imports testing package", goResult.content.includes(`"testing"`));
+  check("testgen go: func Test prefix", goResult.content.includes("func Test"));
+}
+
+// ─── Code Smells ─────────────────────────────────────────────────────────────
+{
+  console.log("\n=== Code Smells ===");
+  const { detectSmells } = await import("../dist/smells.js");
+
+  // Build a full skeleton for sample.ts (has UserService class with methods)
+  const SAMPLE_TS = path.join(__dirname, "fixtures", "sample.ts");
+  const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+  const skel = await buildSkeleton(SAMPLE_TS, "sample.ts", skOpts);
+  const src = (await import("node:fs")).readFileSync(SAMPLE_TS, "utf8");
+  const lineCount = src.split("\n").length;
+
+  // No smells on small clean sample file
+  const smells = detectSmells(skel, lineCount);
+  check("detectSmells returns array", Array.isArray(smells));
+  check("small clean file has no god-class", !smells.some(s => s.smell === "god-class"));
+  check("small file has no large-file", !smells.some(s => s.smell === "large-file"));
+
+  // Synthetic skeleton: god class (11 public methods)
+  const godClassSkel = {
+    ...skel,
+    file: "god.ts",
+    symbols: [{
+      name: "GodClass", kind: "class", visibility: "public", exported: true,
+      range: { startLine: 1, endLine: 200 }, children: Array.from({ length: 11 }, (_, i) => ({
+        name: `method${i}`, kind: "method", visibility: "public", exported: false,
+        range: { startLine: i * 10 + 2, endLine: i * 10 + 8 }, children: [], signature: `method${i}(): void`
+      }))
+    }]
+  };
+  const godSmells = detectSmells(godClassSkel, 200);
+  check("god class detected (>10 methods)", godSmells.some(s => s.smell === "god-class" && s.symbol === "GodClass"));
+
+  // Long method
+  const longMethodSkel = { ...skel, file: "long.ts", symbols: [{
+    name: "bigFn", kind: "function", visibility: "public", exported: true,
+    range: { startLine: 1, endLine: 80 }, children: [], signature: "bigFn(x: string): void"
+  }]};
+  const longSmells = detectSmells(longMethodSkel, 80);
+  check("long-method detected (>60 lines)", longSmells.some(s => s.smell === "long-method" && s.symbol === "bigFn"));
+
+  // Long param list
+  const longParamSkel = { ...skel, file: "params.ts", symbols: [{
+    name: "tooManyParams", kind: "function", visibility: "public", exported: true,
+    range: { startLine: 1, endLine: 5 }, children: [],
+    signature: "tooManyParams(a: string, b: string, c: number, d: boolean, e: string): void"
+  }]};
+  const paramSmells = detectSmells(longParamSkel, 5);
+  check("long-param-list detected (>4 params)", paramSmells.some(s => s.smell === "long-param-list" && s.symbol === "tooManyParams"));
+
+  // Large file
+  const largeFileSmells = detectSmells(skel, 600);
+  check("large-file detected when lineCount > 500", largeFileSmells.some(s => s.smell === "large-file"));
+
+  // SmellResult shape
+  const gs = godSmells.find(s => s.smell === "god-class");
+  check("smell result has required fields", gs && typeof gs.file === "string" && typeof gs.message === "string" && typeof gs.severity === "string");
+}
+
+// ─── Security Scanning ────────────────────────────────────────────────────────
+{
+  console.log("\n=== Security Scanning ===");
+  const { scanFileForSecurityIssues, SECURITY_RULES } = await import("../dist/security.js");
+
+  check("SECURITY_RULES is a non-empty array", Array.isArray(SECURITY_RULES) && SECURITY_RULES.length > 0);
+
+  const evalCode = `const result = eval(userInput);\nconst x = 1;`;
+  const evalIssues = scanFileForSecurityIssues(evalCode, "test.ts");
+  check("eval() flagged as critical", evalIssues.some(i => i.rule === "eval" && i.severity === "critical"));
+  check("eval issue has line number", evalIssues.some(i => i.rule === "eval" && i.line === 1));
+
+  const innerHtmlCode = `el.innerHTML = userContent;\nfoo += 1;`;
+  const innerHtmlIssues = scanFileForSecurityIssues(innerHtmlCode, "test.js");
+  check("innerHTML assignment flagged as high", innerHtmlIssues.some(i => i.rule === "inner-html" && i.severity === "high"));
+
+  const weakCryptoCode = `const hash = crypto.createHash('md5').update(data).digest('hex');`;
+  const weakCryptoIssues = scanFileForSecurityIssues(weakCryptoCode, "test.ts");
+  check("weak-crypto md5 flagged", weakCryptoIssues.some(i => i.rule === "weak-crypto"));
+
+  const hardcodedSecretCode = `const password = "SuperSecret123";`;
+  const secretIssues = scanFileForSecurityIssues(hardcodedSecretCode, "config.ts");
+  check("hardcoded-secret flagged", secretIssues.some(i => i.rule === "hardcoded-secret" && i.severity === "high"));
+
+  // False positive guard: comment lines should be skipped
+  const commentedEval = `// eval(foo)\n// const x = eval(bar);`;
+  const commentIssues = scanFileForSecurityIssues(commentedEval, "test.ts");
+  check("commented-out eval not flagged", !commentIssues.some(i => i.rule === "eval"));
+
+  // http-url detection (non-localhost)
+  const httpCode = `const url = "http://api.example.com/data";`;
+  const httpIssues = scanFileForSecurityIssues(httpCode, "service.ts");
+  check("http:// url flagged as low", httpIssues.some(i => i.rule === "http-url"));
+
+  // localhost excluded from http-url
+  const localhostCode = `const devUrl = "http://localhost:3000/api";`;
+  const localhostIssues = scanFileForSecurityIssues(localhostCode, "dev.ts");
+  check("http://localhost not flagged", !localhostIssues.some(i => i.rule === "http-url"));
+
+  // Issue shape
+  const issue = evalIssues.find(i => i.rule === "eval");
+  check("issue has all required fields", issue && typeof issue.file === "string" && typeof issue.snippet === "string" && typeof issue.line === "number");
+}
+
+// ─── Mermaid Diagrams ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Mermaid Diagrams ===");
+  const { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } = await import("../dist/diagram.js");
+
+  const GRAPH_DIR = path.join(__dirname, "fixtures", "graph");
+  const dOpts = resolveOptions({ detail: "outline", emitHtml: false });
+  const dSkels = [];
+  for (const f of collectSourceFiles(GRAPH_DIR, dOpts)) {
+    const rel = path.relative(ROOT, f).split(path.sep).join("/");
+    dSkels.push(await buildSkeleton(f, rel, dOpts));
+  }
+  const dGraph = buildSymbolGraph(dSkels, ROOT);
+
+  // Class diagram
+  const SAMPLE_TS = path.join(__dirname, "fixtures", "sample.ts");
+  const skelOpts = resolveOptions({ detail: "outline", emitHtml: false });
+  const sampleSkel = await buildSkeleton(SAMPLE_TS, "sample.ts", skelOpts);
+  const classDiag = buildClassDiagram([sampleSkel]);
+  check("class diagram type is 'class'", classDiag.type === "class");
+  check("class diagram starts with classDiagram", classDiag.mermaid.startsWith("classDiagram"));
+  check("class diagram includes UserService", classDiag.mermaid.includes("UserService"));
+  check("class diagram nodeCount > 0", classDiag.nodeCount > 0);
+
+  // Deps diagram
+  const depsDiag = buildDepsDiagram(dGraph);
+  check("deps diagram type is 'deps'", depsDiag.type === "deps");
+  check("deps diagram starts with graph TD", depsDiag.mermaid.startsWith("graph TD"));
+  check("deps diagram nodeCount > 0", depsDiag.nodeCount > 0);
+  check("deps diagram edgeCount > 0", depsDiag.edgeCount > 0);
+
+  // Modules diagram
+  const modDiag = buildModulesDiagram(dGraph);
+  check("modules diagram type is 'modules'", modDiag.type === "modules");
+  check("modules diagram starts with graph LR", modDiag.mermaid.startsWith("graph LR"));
+
+  // DiagramResult shape
+  check("diagram result has mermaid string", typeof classDiag.mermaid === "string" && classDiag.mermaid.length > 0);
+  check("diagram result has title", typeof classDiag.title === "string");
+}
+
+// ─── Fix Suggestions ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Fix Suggestions ===");
+  const { buildFixSuggestions } = await import("../dist/fix.js");
+  const { findDeadExports } = await import("../dist/graph-analysis.js");
+  const { detectSmells } = await import("../dist/smells.js");
+  const { scanFileForSecurityIssues } = await import("../dist/security.js");
+
+  // Empty input → no suggestions
+  const empty = buildFixSuggestions({});
+  check("empty opts returns empty array", Array.isArray(empty) && empty.length === 0);
+
+  // Dead export → remove-dead-export suggestion
+  const dead = [{ file: "src/utils.ts", symbol: "unusedFn", kind: "function", confidence: "high" }];
+  const fixesDead = buildFixSuggestions({ dead });
+  check("dead export generates remove-dead-export fix", fixesDead.some(f => f.kind === "remove-dead-export"));
+  check("dead export fix has priority 2", fixesDead.find(f => f.kind === "remove-dead-export")?.priority === 2);
+  check("dead export fix has before/after", fixesDead.find(f => f.kind === "remove-dead-export")?.before?.includes("export"));
+
+  // God class smell → split-class suggestion
+  const smells = [{ file: "src/big.ts", smell: "god-class", symbol: "BigClass", severity: "warning", message: "BigClass has 12 methods", line: 1 }];
+  const fixesSmell = buildFixSuggestions({ smells });
+  check("god-class generates split-class fix", fixesSmell.some(f => f.kind === "split-class"));
+
+  // Security eval → remove-eval suggestion
+  const security = [{ file: "src/eval.ts", rule: "eval", severity: "critical", message: "eval() detected", line: 5, snippet: "eval(x)" }];
+  const fixesSec = buildFixSuggestions({ security });
+  check("eval security issue generates remove-eval fix", fixesSec.some(f => f.kind === "remove-eval" && f.priority === 1));
+
+  // Priority filtering
+  const all = buildFixSuggestions({ dead, smells, security });
+  check("combined suggestions have varying priorities", all.some(f => f.priority === 1) && all.some(f => f.priority === 2));
+
+  // FixSuggestion shape
+  const fix = all[0];
+  check("fix suggestion has required fields", fix && typeof fix.kind === "string" && typeof fix.file === "string" && typeof fix.description === "string");
+}
+
+// ─── AI Testgen (unit, no API call) ──────────────────────────────────────────
+{
+  console.log("\n=== AI Testgen (module shape) ===");
+  const { tryAiEnhanceTests } = await import("../dist/ai-testgen.js");
+
+  // tryAiEnhanceTests should fall back gracefully when no API key is set
+  const fakeResult = {
+    sourceFile: "src/utils.ts",
+    testFilePath: "src/utils.test.ts",
+    framework: "vitest",
+    content: "describe('add', () => { it('should ...', () => { /* TODO */ }) })",
+    testCount: 1,
+  };
+
+  const env = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+
+  const fallback = await tryAiEnhanceTests(fakeResult, "export function add(a, b) { return a + b; }", "typescript", {});
+  check("tryAiEnhanceTests returns an object", typeof fallback === "object" && fallback !== null);
+  check("fallback has aiEnhanced=false when no key", fallback.aiEnhanced === false);
+  check("fallback preserves original content", fallback.content === fakeResult.content);
+  check("fallback has error field", typeof fallback.error === "string" && fallback.error.length > 0);
+  check("fallback has testCount", fallback.testCount === 1);
+  check("fallback has sourceFile", fallback.sourceFile === "src/utils.ts");
+  check("fallback has framework", fallback.framework === "vitest");
+
+  if (env !== undefined) process.env.ANTHROPIC_API_KEY = env;
+
+  // Verify the module exports the right shape
+  check("tryAiEnhanceTests is a function", typeof tryAiEnhanceTests === "function");
+
+  const { aiEnhanceTests } = await import("../dist/ai-testgen.js");
+  check("aiEnhanceTests is a function", typeof aiEnhanceTests === "function");
+}
+
+// ─── AI Refactor (unit, no API call) ─────────────────────────────────────────
+{
+  console.log("\n=== AI Refactor (module shape) ===");
+  const { aiRefactor, aiRefactorBatch, readSource } = await import("../dist/ai-refactor.js");
+
+  check("aiRefactor is a function", typeof aiRefactor === "function");
+  check("aiRefactorBatch is a function", typeof aiRefactorBatch === "function");
+  check("readSource is a function", typeof readSource === "function");
+
+  // readSource returns empty string for nonexistent file
+  check("readSource returns '' for missing file", readSource("/nonexistent/file.ts") === "");
+
+  // readSource reads an actual file
+  const pkgContent = readSource(path.join(ROOT, "package.json"));
+  check("readSource reads real file", pkgContent.includes("universal-ast-mapper"));
+
+  // aiRefactorBatch with no API key should return results with error
+  const env = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+
+  const fakeSmell = {
+    file: "src/utils.ts", smell: "god-class", symbol: "GodClass",
+    severity: "warning", message: "GodClass has 15 methods", line: 1,
+  };
+  const batchResult = await aiRefactorBatch(
+    [{ kind: "smell", smell: fakeSmell, sourceCode: "class GodClass {}", filePath: "src/utils.ts", language: "typescript" }],
+    {},
+  );
+  check("batch returns array", Array.isArray(batchResult));
+  check("batch result has error field when no key", typeof batchResult[0]?.error === "string");
+  check("batch result has filePath", batchResult[0]?.filePath === "src/utils.ts");
+  check("batch result has issue field", typeof batchResult[0]?.issue === "string");
+
+  if (env !== undefined) process.env.ANTHROPIC_API_KEY = env;
+}
+
+// ─── LSP module shape ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== LSP server (module exists) ===");
+  // Just verify the LSP module compiles — it's a script, not a library
+  check("dist/lsp.js exists", (await import("node:fs")).existsSync(path.join(ROOT, "dist/lsp.js")));
+}
+
+// ─── Explain (unit, no API call) ─────────────────────────────────────────────
+{
+  console.log("\n=== Explain (module shape) ===");
+  const { buildExplainResult, aiExplain } = await import("../dist/explain.js");
+  const { resolveOptions } = await import("../dist/config.js");
+
+  check("buildExplainResult is a function", typeof buildExplainResult === "function");
+  check("aiExplain is a function", typeof aiExplain === "function");
+
+  // Build a result from a real skeleton
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const skel = await buildSkeleton(path.join(GRAPH_DIR, "auth.ts"), "auth.ts", opts);
+  const graph = await (async () => {
+    const { buildSymbolGraph } = await import("../dist/graph.js");
+    const { buildSkeletonsBulk } = await import("../dist/pool.js");
+    const { collectSourceFiles } = await import("../dist/skeleton.js");
+    const files = collectSourceFiles(GRAPH_DIR, opts);
+    const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+    const built = await buildSkeletonsBulk(items, opts);
+    const skels = built.filter(Boolean).map(r => r.skel);
+    return buildSymbolGraph(skels, ROOT);
+  })();
+
+  const result = buildExplainResult("login", skel, graph, null, [], "low");
+  check("result has symbol field", result.symbol === "login");
+  check("result has file field", typeof result.file === "string");
+  check("result has summary object", typeof result.summary === "object");
+  check("summary has callerFiles array", Array.isArray(result.summary.callerFiles));
+  check("summary has callerCount", typeof result.summary.callerCount === "number");
+  check("summary has dependsOn array", Array.isArray(result.summary.dependsOn));
+  check("summary has lineCount", result.summary.lineCount >= 0);
+  check("result has smells array", Array.isArray(result.smells));
+  check("result has complexityRating", result.complexityRating === "low");
+  check("no aiExplanation without AI call", result.aiExplanation === undefined);
+}
+
+// ─── Similar (unit) ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Similar symbols ===");
+  const { findSimilar } = await import("../dist/similar.js");
+  const { resolveOptions } = await import("../dist/config.js");
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+
+  check("findSimilar is a function", typeof findSimilar === "function");
+
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+
+  const groups = findSimilar(skels, { minGroupSize: 2 });
+  check("findSimilar returns an array", Array.isArray(groups));
+  if (groups.length > 0) {
+    const g = groups[0];
+    check("group has fingerprint", typeof g.fingerprint === "string");
+    check("group has description", typeof g.description === "string");
+    check("group has count >= 2", g.count >= 2);
+    check("group has entries array", Array.isArray(g.entries));
+    check("entry has file, symbol, kind, line", typeof g.entries[0].file === "string" && typeof g.entries[0].symbol === "string");
+  } else {
+    check("findSimilar returns empty array (no groups found)", true);
+  }
+
+  // Verify it respects kinds filter
+  const noClasses = findSimilar(skels, { kinds: ["function"] });
+  check("kinds filter excludes class entries", noClasses.every(g => g.entries.every(e => e.kind !== "class")));
+}
+
+// ─── Incremental (unit) ──────────────────────────────────────────────────────
+{
+  console.log("\n=== Incremental analysis ===");
+  const { loadState, saveState, detectChanges, hashFile, hashFiles } = await import("../dist/incremental.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("loadState returns null for missing dir", loadState("/nonexistent/path") === null);
+  check("hashFile returns '' for missing file", hashFile("/nonexistent/file.ts") === "");
+
+  // Save and reload state
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-test-"));
+  const file1 = path.join(ROOT, "package.json");
+  const hashes = hashFiles([file1], ROOT);
+  check("hashFiles returns record", typeof hashes === "object" && Object.keys(hashes).length === 1);
+  check("hash is a hex string", /^[0-9a-f]{16}$/.test(Object.values(hashes)[0]));
+
+  const state = saveState(tmpDir, hashes);
+  check("saveState returns IncrementalState", state && typeof state.hashes === "object" && typeof state.lastRun === "string");
+
+  const loaded = loadState(tmpDir);
+  check("loadState returns saved state", loaded !== null && loaded.root === tmpDir);
+
+  const changes = detectChanges([file1], ROOT, loaded);
+  check("detectChanges finds unchanged files", changes.unchanged.length === 1);
+  check("detectChanges has no new changes", changes.changed.length === 0);
+
+  const noState = detectChanges([file1], ROOT, null);
+  check("null state → all files changed", noState.changed.length === 1);
+
+  // Cleanup
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+// ─── Coverage Merge (unit) ────────────────────────────────────────────────────
+{
+  console.log("\n=== Coverage merge ===");
+  const { detectFormat, mergeCoverage } = await import("../dist/covmerge.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("detectFormat is a function", typeof detectFormat === "function");
+  check("mergeCoverage is a function", typeof mergeCoverage === "function");
+  check("detectFormat .json → istanbul", detectFormat("/tmp/coverage-summary.json") === "istanbul");
+  check("detectFormat lcov.info → lcov", detectFormat("/tmp/lcov.info") === "lcov");
+  check("detectFormat clover.xml → clover", detectFormat("/tmp/clover.xml") === "clover");
+  check("detectFormat cobertura.xml → cobertura", detectFormat("/tmp/cobertura.xml") === "cobertura");
+
+  // Create a minimal Istanbul JSON report and merge it
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-cov-"));
+  const reportPath = path.join(tmpDir, "coverage-summary.json");
+  const fakeReport = {
+    "src/auth.ts": { lines: { total: 10, covered: 8, pct: 80 }, branches: { total: 4, covered: 3, pct: 75 } },
+    total: { lines: { total: 10, covered: 8, pct: 80 } },
+  };
+  fs2.writeFileSync(reportPath, JSON.stringify(fakeReport), "utf8");
+
+  const { mapTestCoverage } = await import("../dist/testmap.js");
+  const { buildSymbolGraph } = await import("../dist/graph.js");
+  const opts = (await import("../dist/config.js")).resolveOptions({ detail: "outline", emitHtml: false });
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+  const structuralMap = mapTestCoverage(buildSymbolGraph(skels, ROOT));
+
+  const merged = mergeCoverage(reportPath, structuralMap, GRAPH_DIR, "istanbul");
+  check("merged has format=istanbul", merged.format === "istanbul");
+  check("merged has reportPath", typeof merged.reportPath === "string");
+  check("merged.actual is an array", Array.isArray(merged.actual));
+  check("merged.summary has totalFiles", typeof merged.summary.totalFiles === "number");
+  check("merged.summary has avgLineCoverage", typeof merged.summary.avgLineCoverage === "number");
+  check("merged.enriched is an array", Array.isArray(merged.enriched));
+  check("merged.deadTests is an array", Array.isArray(merged.deadTests));
+  check("merged.uncovered is an array", Array.isArray(merged.uncovered));
+
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+// ─── Plugins (unit) ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Plugin system ===");
+  const { loadPlugins, runPlugins, EXAMPLE_PLUGIN } = await import("../dist/plugins.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("loadPlugins is a function", typeof loadPlugins === "function");
+  check("runPlugins is a function", typeof runPlugins === "function");
+  check("EXAMPLE_PLUGIN is a string", typeof EXAMPLE_PLUGIN === "string" && EXAMPLE_PLUGIN.length > 0);
+  check("EXAMPLE_PLUGIN contains plugin id", EXAMPLE_PLUGIN.includes("no-console-in-lib"));
+
+  // loadPlugins returns empty array when dir doesn't exist
+  const empty = await loadPlugins("/nonexistent/dir");
+  check("loadPlugins returns [] for missing dir", Array.isArray(empty) && empty.length === 0);
+
+  // Create a temp plugin and run it
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-plugin-"));
+  const pluginsDir = path.join(tmpDir, ".ast-map", "plugins");
+  fs2.mkdirSync(pluginsDir, { recursive: true });
+
+  const pluginCode = `
+export default {
+  id: "test-plugin",
+  description: "Returns a fixed violation for every skeleton",
+  run({ skeletons }) {
+    return skeletons.map(s => ({
+      rule: "test-rule",
+      file: s.file,
+      severity: "info",
+      message: "test violation",
+    }));
+  }
+};
+`;
+  fs2.writeFileSync(path.join(pluginsDir, "test.mjs"), pluginCode, "utf8");
+
+  const plugins = await loadPlugins(tmpDir);
+  check("loadPlugins finds 1 plugin", plugins.length === 1);
+  check("plugin id is test-plugin", plugins[0]?.id === "test-plugin");
+
+  const opts = (await import("../dist/config.js")).resolveOptions({ detail: "full", emitHtml: false });
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+
+  const results = await runPlugins(plugins, { root: tmpDir, skeletons: skels });
+  check("runPlugins returns array", Array.isArray(results));
+  check("result has pluginId", results[0]?.pluginId === "test-plugin");
+  check("result has violations", Array.isArray(results[0]?.violations));
+  check("violations count matches skeleton count", results[0]?.violations.length === skels.length);
+
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

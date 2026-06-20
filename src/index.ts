@@ -47,6 +47,17 @@ import { computeCoupling } from "./coupling.js";
 import { findLayerViolations } from "./layers.js";
 import { computeModuleCoupling } from "./modulecoupling.js";
 import { registerPrompts } from "./prompts.js";
+import { detectSmells, type SmellResult } from "./smells.js";
+import { scanFileForSecurityIssues } from "./security.js";
+import { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } from "./diagram.js";
+import { buildFixSuggestions } from "./fix.js";
+import { generateTestFile, detectTestFramework, type TestFramework } from "./testgen.js";
+import { tryAiEnhanceTests } from "./ai-testgen.js";
+import { aiRefactorBatch, readSource } from "./ai-refactor.js";
+import { buildExplainResult, aiExplain } from "./explain.js";
+import { findSimilar } from "./similar.js";
+import { mergeCoverage, detectFormat, type CoverageFormat } from "./covmerge.js";
+import { loadPlugins, runPlugins } from "./plugins.js";
 
 import { parseRootsFromEnv, resolvePathInRoots, type ResolvedPath } from "./roots.js";
 
@@ -1540,6 +1551,465 @@ server.registerTool(
     } catch (err) {
       return errorText(describeError(err));
     }
+  },
+);
+
+/* ─────────────────── tool: detect_code_smells ──────────────────────────── */
+server.registerTool(
+  "detect_code_smells",
+  {
+    title: "Detect code smells",
+    description:
+      "Scan a file or directory for structural code smells: god classes (too many methods/fields), " +
+      "long methods, long parameter lists, primitive obsession, shallow wrappers, and large files. " +
+      "Returns a list of smell results with file, line, symbol, severity, and message.",
+    inputSchema: {
+      path: z.string().describe("File or directory path relative to project root."),
+      max_methods: z.number().int().optional().describe("God-class threshold: max public methods (default 10)."),
+      max_fields: z.number().int().optional().describe("God-class threshold: max fields (default 8)."),
+      max_method_lines: z.number().int().optional().describe("Long-method threshold: max lines (default 60)."),
+      max_params: z.number().int().optional().describe("Long-param-list threshold: max params (default 4)."),
+    },
+  },
+  async ({ path: input, max_methods, max_fields, max_method_lines, max_params }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const smellOpts = { maxMethods: max_methods, maxFields: max_fields, maxMethodLines: max_method_lines, maxParams: max_params };
+      const allSmells: SmellResult[] = [];
+      const filesToScan = fs.statSync(abs).isDirectory() ? collectSourceFiles(abs, opts) : [abs];
+      for (const fileAbs of filesToScan) {
+        const fileRel = path.relative(root, fileAbs).split(path.sep).join("/");
+        try {
+          const skel = await buildSkeleton(fileAbs, fileRel, opts);
+          const lineCount = fs.readFileSync(fileAbs, "utf8").split("\n").length;
+          allSmells.push(...detectSmells(skel, lineCount, smellOpts));
+        } catch { /* skip */ }
+      }
+      return jsonText({ path: rel, scanned: filesToScan.length, total: allSmells.length, smells: allSmells });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: scan_security ───────────────────────────────── */
+server.registerTool(
+  "scan_security",
+  {
+    title: "Scan for security issues",
+    description:
+      "Static security scan across 12 rules: eval, innerHTML, dangerously-set-inner-html, " +
+      "child-process, shell-exec, weak-crypto, hardcoded-secret, sql-injection, http-url, " +
+      "no-rate-limit, prototype-pollution. Returns issues with file, rule, severity, line, and snippet.",
+    inputSchema: {
+      path: z.string().describe("File or directory path relative to project root."),
+      min_severity: z
+        .enum(["critical", "high", "medium", "low"])
+        .optional()
+        .describe("Only return issues at or above this severity (default: low = all)."),
+    },
+  },
+  async ({ path: input, min_severity }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const order = ["critical", "high", "medium", "low"] as const;
+      const minIdx = order.indexOf((min_severity as (typeof order)[number]) ?? "low");
+      const allIssues: ReturnType<typeof scanFileForSecurityIssues> = [];
+      const filesToScan = fs.statSync(abs).isDirectory() ? collectSourceFiles(abs, opts) : [abs];
+      for (const fileAbs of filesToScan) {
+        const fileRel = path.relative(root, fileAbs).split(path.sep).join("/");
+        try {
+          const source = fs.readFileSync(fileAbs, "utf8");
+          const issues = scanFileForSecurityIssues(source, fileRel);
+          allIssues.push(...issues.filter((i) => order.indexOf(i.severity as (typeof order)[number]) <= minIdx));
+        } catch { /* skip */ }
+      }
+      return jsonText({ path: rel, scanned: filesToScan.length, total: allIssues.length, issues: allIssues });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: generate_diagram ───────────────────────────── */
+server.registerTool(
+  "generate_diagram",
+  {
+    title: "Generate Mermaid diagram",
+    description:
+      "Generate a Mermaid diagram of the codebase. " +
+      "type=class: classDiagram of classes/interfaces/enums and their relationships. " +
+      "type=deps: file dependency graph (graph TD). " +
+      "type=modules: collapsed module-level dependency graph (graph LR).",
+    inputSchema: {
+      path: z.string().describe("Directory to scan."),
+      type: z
+        .enum(["class", "deps", "modules"])
+        .optional()
+        .describe("Diagram type: class | deps | modules (default: deps)."),
+      max_nodes: z.number().int().optional().describe("Max nodes in deps diagram (default 50)."),
+    },
+  },
+  async ({ path: input, type, max_nodes }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) return errorText("generate_diagram requires a directory.");
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skeletons: SkeletonFile[] = [];
+      for (const file of files) {
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
+      }
+      const diagramType = type ?? "deps";
+      let result;
+      if (diagramType === "class") {
+        result = buildClassDiagram(skeletons);
+      } else if (diagramType === "modules") {
+        const graph = buildSymbolGraph(skeletons, root);
+        result = buildModulesDiagram(graph);
+      } else {
+        const graph = buildSymbolGraph(skeletons, root);
+        result = buildDepsDiagram(graph, max_nodes ?? 50);
+      }
+      return jsonText({ path: rel, ...result });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: get_fix_suggestions ─────────────────────────── */
+server.registerTool(
+  "get_fix_suggestions",
+  {
+    title: "Get fix suggestions",
+    description:
+      "Return actionable, prioritised fix suggestions derived from dead exports, code smells, " +
+      "and security issues. Each suggestion has a kind, file, line, description, before/after snippet, " +
+      "and priority (1=must fix, 2=should fix, 3=nice to have).",
+    inputSchema: {
+      path: z.string().describe("File or directory path."),
+      min_priority: z
+        .number()
+        .int()
+        .min(1)
+        .max(3)
+        .optional()
+        .describe("Only return suggestions at or above this priority (1=must, 2=should, 3=nice). Default 3 (all)."),
+    },
+  },
+  async ({ path: input, min_priority }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const filesToScan = fs.statSync(abs).isDirectory() ? collectSourceFiles(abs, opts) : [abs];
+      const skeletons: SkeletonFile[] = [];
+      const allSmells: SmellResult[] = [];
+      const allSecurity: ReturnType<typeof scanFileForSecurityIssues> = [];
+
+      for (const fileAbs of filesToScan) {
+        const fileRel = path.relative(root, fileAbs).split(path.sep).join("/");
+        try {
+          const skel = await buildSkeleton(fileAbs, fileRel, opts);
+          skeletons.push(skel);
+          const source = fs.readFileSync(fileAbs, "utf8");
+          allSmells.push(...detectSmells(skel, source.split("\n").length));
+          allSecurity.push(...scanFileForSecurityIssues(source, fileRel));
+        } catch { /* skip */ }
+      }
+
+      const graph = buildSymbolGraph(skeletons, root);
+      const dead = findDeadExports(graph);
+      const minP = min_priority ?? 3;
+      const suggestions = buildFixSuggestions({ dead, smells: allSmells, security: allSecurity, skeletons })
+        .filter((s) => s.priority <= minP);
+
+      return jsonText({ path: rel, scanned: filesToScan.length, total: suggestions.length, suggestions });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: generate_tests ──────────────────────────────── */
+server.registerTool(
+  "generate_tests",
+  {
+    title: "Generate test stubs",
+    description:
+      "Generate test stubs for a source file using its AST skeleton. " +
+      "Supports vitest, jest, mocha, node:test, pytest, and gotest. " +
+      "Returns the generated test file content and metadata (testCount, framework, testFilePath).",
+    inputSchema: {
+      path: z.string().describe("Source file path relative to project root."),
+      framework: z
+        .enum(["vitest", "jest", "mocha", "node", "pytest", "gotest"])
+        .optional()
+        .describe("Test framework. Auto-detected from package.json when omitted."),
+      exported_only: z
+        .boolean()
+        .optional()
+        .describe("Only generate tests for exported symbols (default: true)."),
+    },
+  },
+  async ({ path: input, framework, exported_only }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) return errorText("generate_tests requires a single file.");
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const skel = await buildSkeleton(abs, rel, opts);
+      const fw = (framework as TestFramework | undefined) ?? detectTestFramework(root);
+      const result = generateTestFile(skel, abs, { framework: fw, exportedOnly: exported_only ?? true });
+      return jsonText(result);
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: generate_tests_ai ───────────────────────────── */
+server.registerTool(
+  "generate_tests_ai",
+  {
+    title: "Generate tests with AI (Claude)",
+    description:
+      "Generate tests for a source file using the AST skeleton for structure, then enhance them " +
+      "with Claude to produce real assertions instead of TODO placeholders. " +
+      "Requires ANTHROPIC_API_KEY env var or explicit api_key. Falls back to stubs if the API is unavailable.",
+    inputSchema: {
+      path: z.string().describe("Source file path relative to project root."),
+      framework: z
+        .enum(["vitest", "jest", "mocha", "node", "pytest", "gotest"])
+        .optional()
+        .describe("Test framework. Auto-detected when omitted."),
+      api_key: z.string().optional().describe("Anthropic API key (overrides ANTHROPIC_API_KEY env var)."),
+      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-4-6)."),
+    },
+  },
+  async ({ path: input, framework, api_key, model }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) return errorText("generate_tests_ai requires a single file.");
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const skel = await buildSkeleton(abs, rel, opts);
+      const fw = (framework as TestFramework | undefined) ?? detectTestFramework(root);
+      const stubs = generateTestFile(skel, abs, { framework: fw, exportedOnly: true });
+      const sourceCode = fs.readFileSync(abs, "utf8");
+      const result = await tryAiEnhanceTests(stubs, sourceCode, skel.language, { apiKey: api_key, model });
+      return jsonText(result);
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: ai_refactor ─────────────────────────────────── */
+server.registerTool(
+  "ai_refactor",
+  {
+    title: "AI-powered refactoring suggestions",
+    description:
+      "Send smells or security issues from a file to Claude and receive concrete refactored code. " +
+      "Returns before/after code blocks and an explanation for each issue found. " +
+      "Requires ANTHROPIC_API_KEY env var or explicit api_key.",
+    inputSchema: {
+      path: z.string().describe("Source file to refactor."),
+      kind: z
+        .enum(["smell", "security", "both"])
+        .optional()
+        .describe("Which issues to refactor: smell | security | both (default: both)."),
+      api_key: z.string().optional().describe("Anthropic API key (overrides ANTHROPIC_API_KEY env var)."),
+      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-4-6)."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(10)
+        .optional()
+        .describe("Max issues to send to AI (default 3 to control cost)."),
+    },
+  },
+  async ({ path: input, kind, api_key, model, limit }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) return errorText("ai_refactor requires a single file.");
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const skel = await buildSkeleton(abs, rel, opts);
+      const source = readSource(abs);
+      const lang = skel.language;
+      const cap = limit ?? 3;
+
+      const targets: Parameters<typeof aiRefactorBatch>[0] = [];
+      const wantSmells = (kind ?? "both") !== "security";
+      const wantSecurity = (kind ?? "both") !== "smell";
+
+      if (wantSmells) {
+        const smells = detectSmells(skel, source.split("\n").length);
+        for (const smell of smells.slice(0, cap - targets.length)) {
+          targets.push({ kind: "smell", smell, sourceCode: source, filePath: rel, language: lang });
+        }
+      }
+      if (wantSecurity && targets.length < cap) {
+        const issues = scanFileForSecurityIssues(source, rel);
+        for (const sec of issues.slice(0, cap - targets.length)) {
+          targets.push({ kind: "security", security: sec, sourceCode: source, filePath: rel, language: lang });
+        }
+      }
+
+      if (targets.length === 0) return jsonText({ path: rel, message: "No issues found to refactor.", results: [] });
+
+      const results = await aiRefactorBatch(targets, { apiKey: api_key, model });
+      return jsonText({ path: rel, total: results.length, results });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: explain_symbol ──────────────────────────────── */
+server.registerTool(
+  "explain_symbol",
+  {
+    title: "Explain a symbol (purpose, callers, deps, risk)",
+    description:
+      "Provide a structural explanation of any named symbol: what it does, who calls it, " +
+      "what it depends on, smells, complexity rating, and estimated change risk. " +
+      "With ai=true, Claude writes a prose explanation using the structural data (requires ANTHROPIC_API_KEY).",
+    inputSchema: {
+      path: z.string().describe("File containing the symbol, relative to project root."),
+      symbol: z.string().describe("Symbol name to explain."),
+      scanDir: z.string().optional().describe("Directory to build the dependency graph from. Default: file directory."),
+      ai: z.boolean().optional().describe("Use Claude AI to generate a prose explanation. Default false."),
+      api_key: z.string().optional().describe("Anthropic API key (overrides ANTHROPIC_API_KEY)."),
+      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-4-6)."),
+    },
+  },
+  async ({ path: input, symbol, scanDir, ai, api_key, model }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (fs.statSync(abs).isDirectory()) return errorText("explain_symbol requires a single file.");
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const skel = await buildSkeleton(abs, rel, opts);
+
+      const scanRoot = scanDir ? resolveInRoot(scanDir).abs : path.dirname(abs);
+      const skFiles = collectSourceFiles(scanRoot, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of skFiles) {
+        const r = path.relative(root, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const graph = buildSymbolGraph(skels, root);
+      const targetId = `${rel}::${symbol}`;
+      const impact = getChangeImpact(graph, targetId);
+
+      const sourceCode = fs.readFileSync(abs, "utf8");
+      const smellMessages = detectSmells(skel, sourceCode.split("\n").length).map((s) => s.message);
+      const cx = await computeFileComplexity(abs, rel);
+      const fnCx = cx?.functions.find((f) => f.name === symbol);
+
+      let result = buildExplainResult(symbol, skel, graph, impact, smellMessages, fnCx?.rating);
+
+      if (ai) {
+        result = await aiExplain(result, sourceCode, { apiKey: api_key, model });
+      }
+
+      return jsonText(result);
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: find_similar ────────────────────────────────── */
+server.registerTool(
+  "find_similar",
+  {
+    title: "Find structurally similar symbols",
+    description:
+      "Find groups of functions/methods/classes that share the same structural fingerprint " +
+      "(param count, async, return type, size, nesting) across a directory. " +
+      "Highlights duplication and consolidation candidates — no AI or text comparison needed.",
+    inputSchema: {
+      path: z.string().describe("Directory to scan, relative to project root or absolute within it."),
+      kinds: z.array(z.string()).optional().describe("Symbol kinds to include (default: function, method, class)."),
+      min_group_size: z.number().int().min(2).optional().describe("Minimum group size to report (default 2)."),
+    },
+  },
+  async ({ path: input, kinds, min_group_size }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) return errorText("find_similar requires a directory.");
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(root, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const groups = findSimilar(skels, { kinds, minGroupSize: min_group_size });
+      return jsonText({ directory: rel.split(path.sep).join("/"), groupCount: groups.length, groups });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: merge_coverage ──────────────────────────────── */
+server.registerTool(
+  "merge_coverage",
+  {
+    title: "Merge actual coverage with structural map",
+    description:
+      "Enrich the structural test coverage map (which files have tests) with actual line/branch " +
+      "percentages from a real coverage report. Supports Istanbul JSON, lcov, Clover XML, Cobertura XML. " +
+      "Returns enriched per-file coverage, dead tests (tested but 0% actual), and uncovered files.",
+    inputSchema: {
+      report: z.string().describe("Path to the coverage report file (relative to project root or absolute)."),
+      path: z.string().optional().describe("Project directory to scan for structural map. Default project root."),
+      format: z
+        .enum(["auto", "istanbul", "lcov", "clover", "cobertura"])
+        .optional()
+        .describe("Coverage format. Default auto-detected from file extension/content."),
+    },
+  },
+  async ({ report, path: input, format }) => {
+    try {
+      const { abs: reportAbs } = resolveInRoot(report);
+      if (!fs.existsSync(reportAbs)) return errorText(`Coverage report not found: ${report}`);
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) return errorText("merge_coverage requires a directory.");
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(root, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const { mapTestCoverage } = await import("./testmap.js");
+      const structuralMap = mapTestCoverage(buildSymbolGraph(skels, root));
+      const merged = mergeCoverage(reportAbs, structuralMap, abs, (format ?? "auto") as CoverageFormat);
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...merged });
+    } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: run_plugins ─────────────────────────────────── */
+server.registerTool(
+  "run_plugins",
+  {
+    title: "Run custom lint plugins",
+    description:
+      "Load and run all `.mjs`/`.js` plugins from `<root>/.ast-map/plugins/` against the current skeletons. " +
+      "Each plugin exports an `AstMapPlugin` with an `id` and a `run(ctx)` function that returns violations. " +
+      "Returns per-plugin violation lists with file, line, symbol, severity, and message.",
+    inputSchema: {
+      path: z.string().optional().describe("Project directory. Defaults to project root."),
+    },
+  },
+  async ({ path: input }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
+      if (!fs.statSync(abs).isDirectory()) return errorText("run_plugins requires a directory.");
+      const plugins = await loadPlugins(abs);
+      if (plugins.length === 0) {
+        return jsonText({ directory: rel.split(path.sep).join("/") || ".", plugins: [], message: "No plugins found in .ast-map/plugins/" });
+      }
+      const opts = resolveOptions({ detail: "full", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skels: SkeletonFile[] = [];
+      for (const f of files) {
+        const r = path.relative(root, f).split(path.sep).join("/");
+        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
+      }
+      const results = await runPlugins(plugins, { root: abs, skeletons: skels });
+      const totalViolations = results.reduce((s, r) => s + r.violations.length, 0);
+      return jsonText({ directory: rel.split(path.sep).join("/") || ".", pluginCount: plugins.length, totalViolations, plugins: results });
+    } catch (err) { return errorText(describeError(err)); }
   },
 );
 
