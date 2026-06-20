@@ -23,6 +23,7 @@ import { buildReport, buildReportHtml } from "./report.js";
 import { appendHistory, loadHistory } from "./history.js";
 import { buildDashboardHtml } from "./dashboard.js";
 import { runQualityGate, BASELINE_FILENAME, type CheckThresholds } from "./check.js";
+import { generateTestFile, detectTestFramework, resolveTestPath, type TestFramework } from "./testgen.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
@@ -1375,6 +1376,113 @@ program
     console.log();
   });
 
+// ─── Command: testgen ─────────────────────────────────────────────────────────
+
+program
+  .command("testgen <path>")
+  .description("Generate test stubs for a file or every uncovered file in a directory")
+  .option("-f, --framework <fw>", "vitest | jest | mocha | node | pytest | gotest (auto-detected)")
+  .option("-o, --out <dir>", "Output directory for generated test files (default: alongside source)")
+  .option("--all", "Include non-exported symbols too")
+  .option("--uncovered", "Directory mode: only generate for files that have no tests yet")
+  .option("--dry-run", "Print generated content to stdout, do not write files")
+  .option("--json", "Output metadata as JSON")
+  .action(async (inputPath: string, opts: {
+    framework?: string; out?: string; all?: boolean;
+    uncovered?: boolean; dryRun?: boolean; json?: boolean;
+  }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    const isDir = fs.statSync(abs).isDirectory();
+    const fw = (opts.framework as TestFramework | undefined) ?? detectTestFramework(ROOT);
+    const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+    const exportedOnly = !opts.all;
+
+    async function processFile(fileAbs: string, fileRel: string): Promise<{ written: boolean; skipped: boolean; result: ReturnType<typeof generateTestFile> }> {
+      const skel = await buildSkeleton(fileAbs, fileRel, skOpts);
+      const result = generateTestFile(skel, fileAbs, { framework: fw, exportedOnly, outDir: opts.out ? path.resolve(process.cwd(), opts.out) : undefined });
+
+      // Skip if no tests could be generated
+      if (result.testCount === 0) return { written: false, skipped: true, result };
+
+      if (opts.dryRun) {
+        console.log(bold(`\n── ${result.sourceFile} ──`) + dim(` → ${path.relative(process.cwd(), result.testFilePath)}`));
+        console.log(result.content);
+        return { written: false, skipped: false, result };
+      }
+
+      // Don't overwrite existing test files
+      if (fs.existsSync(result.testFilePath)) return { written: false, skipped: true, result };
+
+      fs.mkdirSync(path.dirname(result.testFilePath), { recursive: true });
+      fs.writeFileSync(result.testFilePath, result.content, "utf8");
+      return { written: true, skipped: false, result };
+    }
+
+    if (!isDir) {
+      // Single file mode
+      try {
+        const { written, skipped, result } = await processFile(abs, rel);
+        if (opts.json) return jsonOut(result);
+        if (skipped && fs.existsSync(result.testFilePath)) {
+          console.log(yellow("⚠") + ` test file already exists: ${path.relative(process.cwd(), result.testFilePath)}`);
+        } else if (skipped) {
+          console.log(dim("(no testable symbols found)"));
+        } else if (written) {
+          console.log(green("✓") + ` ${path.relative(process.cwd(), result.testFilePath)}  ${dim(`(${result.testCount} stub(s), ${fw})`)}`);
+        }
+      } catch (e) {
+        die(e instanceof Error ? e.message : String(e));
+      }
+      return;
+    }
+
+    // Directory mode
+    let filesToProcess = collectSourceFiles(abs, skOpts);
+
+    if (opts.uncovered) {
+      const allSkels = await gatherSkeletons(abs);
+      const graph = buildSymbolGraph(allSkels, ROOT);
+      const coverageMap = mapTestCoverage(graph);
+      const untestedSet = new Set(coverageMap.untested.map((u) => path.resolve(ROOT, u.file)));
+      filesToProcess = filesToProcess.filter((f) => untestedSet.has(f));
+    }
+
+    const results: ReturnType<typeof generateTestFile>[] = [];
+    let written = 0, skipped = 0, errors = 0;
+
+    for (const fileAbs of filesToProcess) {
+      const fileRel = path.relative(ROOT, fileAbs).split(path.sep).join("/");
+      try {
+        const { written: w, skipped: s, result } = await processFile(fileAbs, fileRel);
+        results.push(result);
+        if (w) written++;
+        if (s) skipped++;
+      } catch {
+        errors++;
+      }
+    }
+
+    if (opts.json) return jsonOut({ directory: rel, framework: fw, written, skipped, errors, files: results });
+
+    if (!opts.dryRun) {
+      header(`Test Generation — ${rel}/  ${dim(`(${fw})`)}`);
+      const generated = results.filter((r) => r.testCount > 0);
+      table(
+        generated
+          .filter((r) => !fs.existsSync(r.testFilePath) || written > 0)
+          .map((r) => [
+            r.sourceFile,
+            path.relative(process.cwd(), r.testFilePath),
+            String(r.testCount),
+          ]),
+        [["Source", 36], ["Test file", 40], ["Stubs", 5]],
+      );
+      console.log(`\n  ${green(`${written} file(s) written`)}  ·  ${dim(`${skipped} skipped`)}`);
+      if (errors > 0) console.log(indent(yellow(`${errors} file(s) errored`)));
+    }
+    console.log();
+  });
+
 // ─── Command: deps ────────────────────────────────────────────────────────────
 
 program
@@ -1479,6 +1587,8 @@ ${bold("Examples:")}
   ast-map dashboard src/ -o dash.html
   ast-map history
   ast-map watch src/ --port 4321
+  ast-map testgen src/utils.ts --framework vitest
+  ast-map testgen src/ --uncovered --framework jest
 
 ${bold("Root:")}
   Defaults to cwd. Override with AST_MAP_ROOT=<path> or run from your project root.

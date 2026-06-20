@@ -650,6 +650,71 @@ console.log("\n=== Symbol Search ===");
   check("orphan test detected (e2e-flow)", map.orphanTests.length === 1 && map.orphanTests[0] === "tests/e2e-flow.test.ts");
 }
 
+// ─── Test Generation ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Test Generation ===");
+  const { generateTestFile, detectTestFramework, resolveTestPath } = await import("../dist/testgen.js");
+
+  // Framework detection from project root (which has no jest/vitest → node)
+  const fw = detectTestFramework(ROOT);
+  check("detectTestFramework returns a valid framework", ["vitest","jest","mocha","node"].includes(fw));
+
+  // resolveTestPath
+  check("resolveTestPath ts → *.test.ts", resolveTestPath("/p/src/utils.ts", "typescript").endsWith("utils.test.ts"));
+  check("resolveTestPath js → *.test.js", resolveTestPath("/p/src/utils.js", "javascript").endsWith("utils.test.js"));
+  check("resolveTestPath py → test_*.py", resolveTestPath("/p/utils.py", "python").endsWith("test_utils.py"));
+  check("resolveTestPath go → *_test.go", resolveTestPath("/p/utils.go", "go").endsWith("utils_test.go"));
+  check("resolveTestPath java → *Test.java", resolveTestPath("/p/Utils.java", "java").endsWith("UtilsTest.java"));
+
+  // Build a full skeleton for sample.ts
+  const SAMPLE_TS = path.join(__dirname, "fixtures", "sample.ts");
+  const skelOpts = resolveOptions({ detail: "full", emitHtml: false });
+  const skel = await buildSkeleton(SAMPLE_TS, "sample.ts", skelOpts);
+
+  // node:test framework
+  const nodeResult = generateTestFile(skel, SAMPLE_TS, { framework: "node" });
+  check("testgen: node:test imports node:test", nodeResult.content.includes("node:test"));
+  check("testgen: node:test imports assert", nodeResult.content.includes("node:assert"));
+  check("testgen: imports source module", nodeResult.content.includes("from './sample'"));
+  check("testgen: class UserService gets describe block", nodeResult.content.includes("describe('UserService'"));
+  check("testgen: async method getUser gets async it", nodeResult.content.includes("async () => {") && nodeResult.content.includes("getUser"));
+  check("testgen: function helper gets describe block", nodeResult.content.includes("describe('helper'"));
+  check("testgen: exported const double gets describe block", nodeResult.content.includes("describe('double'"));
+  check("testgen: type-only interface exported separately", nodeResult.content.includes("import type {") && nodeResult.content.includes("Repository"));
+  check("testgen: testCount > 0", nodeResult.testCount > 0);
+
+  // vitest framework
+  const vitestResult = generateTestFile(skel, SAMPLE_TS, { framework: "vitest" });
+  check("testgen vitest: imports from vitest", vitestResult.content.includes("from 'vitest'"));
+  check("testgen vitest: expect().toBeDefined used", vitestResult.content.includes("toBeDefined"));
+
+  // jest framework
+  const jestResult = generateTestFile(skel, SAMPLE_TS, { framework: "jest" });
+  check("testgen jest: imports from @jest/globals", jestResult.content.includes("@jest/globals"));
+
+  // exported-only filter (default): multiply is not exported → should not appear
+  check("testgen: non-exported multiply not included", !nodeResult.content.includes("describe('multiply'"));
+  // with --all: multiply appears
+  const allResult = generateTestFile(skel, SAMPLE_TS, { framework: "node", exportedOnly: false });
+  check("testgen --all: non-exported multiply included", allResult.content.includes("multiply"));
+
+  // Python
+  const SAMPLE_PY = path.join(__dirname, "fixtures", "sample.py");
+  const skelPy = await buildSkeleton(SAMPLE_PY, "sample.py", skelOpts);
+  const pyResult = generateTestFile(skelPy, SAMPLE_PY, { framework: "pytest" });
+  check("testgen python: imports pytest", pyResult.content.includes("import pytest"));
+  check("testgen python: test_ prefix for functions", pyResult.content.includes("def test_"));
+  check("testgen python: Test class for classes", pyResult.content.includes("class TestInventoryService"));
+  check("testgen python: testCount > 0", pyResult.testCount > 0);
+
+  // Go
+  const SAMPLE_GO = path.join(__dirname, "fixtures", "services", "inventory.go");
+  const skelGo = await buildSkeleton(SAMPLE_GO, "services/inventory.go", skelOpts);
+  const goResult = generateTestFile(skelGo, SAMPLE_GO, { framework: "gotest" });
+  check("testgen go: imports testing package", goResult.content.includes(`"testing"`));
+  check("testgen go: func Test prefix", goResult.content.includes("func Test"));
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);
