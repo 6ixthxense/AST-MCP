@@ -24,6 +24,10 @@ import { appendHistory, loadHistory } from "./history.js";
 import { buildDashboardHtml } from "./dashboard.js";
 import { runQualityGate, BASELINE_FILENAME, type CheckThresholds } from "./check.js";
 import { generateTestFile, detectTestFramework, resolveTestPath, type TestFramework } from "./testgen.js";
+import { detectSmells, type SmellOptions } from "./smells.js";
+import { scanFileForSecurityIssues, SECURITY_RULES } from "./security.js";
+import { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } from "./diagram.js";
+import { buildFixSuggestions } from "./fix.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
@@ -1483,6 +1487,196 @@ program
     console.log();
   });
 
+// ─── Command: smells ──────────────────────────────────────────────────────────
+
+program
+  .command("smells [path]")
+  .description("Detect code smells: god classes, long methods, long param lists, primitive obsession")
+  .option("--max-methods <n>", "God-class threshold: public methods per class", (v) => parseInt(v, 10), 10)
+  .option("--max-fields <n>", "God-class threshold: fields per class", (v) => parseInt(v, 10), 8)
+  .option("--max-lines <n>", "Long-method threshold: lines per function", (v) => parseInt(v, 10), 60)
+  .option("--max-params <n>", "Long-param-list threshold: parameters per function", (v) => parseInt(v, 10), 4)
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string | undefined, opts: { maxMethods: number; maxFields: number; maxLines: number; maxParams: number; json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath ?? ".");
+    const stat = fs.statSync(abs);
+    const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+    const smellOpts: SmellOptions = { maxMethods: opts.maxMethods, maxFields: opts.maxFields, maxMethodLines: opts.maxLines, maxParams: opts.maxParams };
+
+    const allSmells: ReturnType<typeof detectSmells> = [];
+    const filesToScan = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+
+    for (const fileAbs of filesToScan) {
+      const fileRel = path.relative(ROOT, fileAbs).split(path.sep).join("/");
+      try {
+        const skel = await buildSkeleton(fileAbs, fileRel, skOpts);
+        const lineCount = fs.readFileSync(fileAbs, "utf8").split("\n").length;
+        allSmells.push(...detectSmells(skel, lineCount, smellOpts));
+      } catch { /* skip unsupported */ }
+    }
+
+    if (opts.json) return jsonOut({ scanned: filesToScan.length, smellCount: allSmells.length, smells: allSmells });
+
+    const warnings = allSmells.filter((s) => s.severity === "warning");
+    const infos = allSmells.filter((s) => s.severity === "info");
+    header(`Code Smells — ${rel}${stat.isDirectory() ? "/" : ""}  ${dim(`(${filesToScan.length} files)`)}`);
+    if (allSmells.length === 0) {
+      console.log(indent(green("✓ No code smells detected.")));
+    } else {
+      const byFile = new Map<string, typeof allSmells>();
+      for (const s of allSmells) {
+        const list = byFile.get(s.file) ?? byFile.set(s.file, []).get(s.file)!;
+        list.push(s);
+      }
+      for (const [file, smells] of byFile) {
+        console.log(indent(bold(file)));
+        for (const s of smells) {
+          const icon = s.severity === "warning" ? yellow("⚠") : dim("ℹ");
+          const loc = s.line ? dim(`:${s.line}`) : "";
+          console.log(indent(`${icon}  [${s.smell}]${loc}  ${s.message}`, 4));
+        }
+      }
+      console.log(`\n  ${yellow(`${warnings.length} warning(s)`)}  ·  ${dim(`${infos.length} info(s)`)}`);
+    }
+    console.log();
+  });
+
+// ─── Command: security ────────────────────────────────────────────────────────
+
+program
+  .command("security [path]")
+  .description("Static security scan: eval, innerHTML, weak crypto, hardcoded secrets, SQLi, and more")
+  .option("--json", "Output as JSON")
+  .option("-s, --severity <level>", "Minimum severity: critical|high|medium|low", "low")
+  .action(async (inputPath: string | undefined, opts: { json?: boolean; severity: string }) => {
+    const { abs, rel } = resolveArg(inputPath ?? ".");
+    const stat = fs.statSync(abs);
+    const skOpts = resolveOptions({ detail: "outline", emitHtml: false });
+    const filesToScan = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+    const severityRank = { critical: 4, high: 3, medium: 2, low: 1 };
+    const minRank = severityRank[opts.severity as keyof typeof severityRank] ?? 1;
+
+    const allIssues: ReturnType<typeof scanFileForSecurityIssues> = [];
+    for (const fileAbs of filesToScan) {
+      const fileRel = path.relative(ROOT, fileAbs).split(path.sep).join("/");
+      try {
+        const src = fs.readFileSync(fileAbs, "utf8");
+        const issues = scanFileForSecurityIssues(src, fileRel).filter((i) => (severityRank[i.severity] ?? 0) >= minRank);
+        allIssues.push(...issues);
+      } catch { /* skip */ }
+    }
+
+    if (opts.json) return jsonOut({ scanned: filesToScan.length, issueCount: allIssues.length, issues: allIssues });
+
+    const bySev = { critical: allIssues.filter(i => i.severity === "critical"), high: allIssues.filter(i => i.severity === "high"), medium: allIssues.filter(i => i.severity === "medium"), low: allIssues.filter(i => i.severity === "low") };
+    const sevColor = (s: string) => s === "critical" || s === "high" ? red : s === "medium" ? yellow : dim;
+    header(`Security Scan — ${rel}${stat.isDirectory() ? "/" : ""}  ${dim(`(${filesToScan.length} files)`)}`);
+    if (allIssues.length === 0) {
+      console.log(indent(green("✓ No security issues found.")));
+    } else {
+      for (const issue of allIssues) {
+        const sev = sevColor(issue.severity)(issue.severity.toUpperCase().padEnd(8));
+        console.log(indent(`${sev}  ${dim(issue.file + ":" + issue.line)}  [${issue.rule}]  ${dim(issue.snippet.slice(0, 80))}`));
+      }
+      console.log(`\n  ${red(`${bySev.critical.length} critical`)} · ${red(`${bySev.high.length} high`)} · ${yellow(`${bySev.medium.length} medium`)} · ${dim(`${bySev.low.length} low`)}`);
+    }
+    console.log();
+  });
+
+// ─── Command: diagram ─────────────────────────────────────────────────────────
+
+program
+  .command("diagram [dir]")
+  .alias("mermaid")
+  .description("Generate a Mermaid diagram: class (default), deps, or modules")
+  .option("-t, --type <type>", "Diagram type: class | deps | modules", "class")
+  .option("-o, --out <file>", "Write to file (default: print to stdout)")
+  .option("--md", "Wrap output in a Markdown ```mermaid fence")
+  .action(async (dir: string | undefined, opts: { type: string; out?: string; md?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs, "outline");
+    const graph = buildSymbolGraph(skeletons, ROOT);
+
+    let result: ReturnType<typeof buildClassDiagram>;
+    if (opts.type === "deps") result = buildDepsDiagram(graph);
+    else if (opts.type === "modules") result = buildModulesDiagram(graph);
+    else result = buildClassDiagram(skeletons);
+
+    const output = opts.md
+      ? "```mermaid\n" + result.mermaid + "\n```"
+      : result.mermaid;
+
+    if (opts.out) {
+      const outAbs = path.resolve(process.cwd(), opts.out);
+      fs.mkdirSync(path.dirname(outAbs), { recursive: true });
+      fs.writeFileSync(outAbs, output, "utf8");
+      header(`Diagram (${result.type}) — ${rel}/`);
+      console.log(indent(`${bold("Nodes:")}  ${result.nodeCount}  ·  ${bold("Edges:")}  ${result.edgeCount}`));
+      console.log(indent(green("✓ wrote " + path.relative(process.cwd(), outAbs))));
+    } else {
+      console.log(output);
+    }
+    console.log();
+  });
+
+// ─── Command: fix ─────────────────────────────────────────────────────────────
+
+program
+  .command("fix [dir]")
+  .description("Show actionable fix suggestions: dead exports, code smells, security issues")
+  .option("--json", "Output as JSON")
+  .option("-p, --priority <n>", "Only show fixes of priority ≤ n (1=must, 2=should, 3=nice)", (v) => parseInt(v, 10), 3)
+  .action(async (dir: string | undefined, opts: { json?: boolean; priority: number }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs, "full");
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const dead = findDeadExports(graph).filter((d) => d.confidence === "high");
+    const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+
+    const allSmells: ReturnType<typeof detectSmells> = [];
+    const allSecurity: ReturnType<typeof scanFileForSecurityIssues> = [];
+    for (const skel of skeletons) {
+      const fileAbs = path.resolve(ROOT, skel.file);
+      try {
+        const src = fs.readFileSync(fileAbs, "utf8");
+        allSmells.push(...detectSmells(skel, src.split("\n").length));
+        allSecurity.push(...scanFileForSecurityIssues(src, skel.file));
+      } catch { /* skip */ }
+    }
+
+    const suggestions = buildFixSuggestions({ dead, smells: allSmells, security: allSecurity })
+      .filter((s) => s.priority <= opts.priority)
+      .sort((a, b) => a.priority - b.priority || a.file.localeCompare(b.file));
+
+    if (opts.json) return jsonOut({ directory: rel, count: suggestions.length, suggestions });
+
+    header(`Fix Suggestions — ${rel}/`);
+    if (suggestions.length === 0) {
+      console.log(indent(green("✓ Nothing to fix.")));
+    } else {
+      const priLabel = (p: number) => p === 1 ? red("[P1 must]") : p === 2 ? yellow("[P2 should]") : dim("[P3 nice]");
+      for (const s of suggestions) {
+        const loc = s.line ? dim(`:${s.line}`) : "";
+        console.log(indent(`${priLabel(s.priority)}  ${bold(s.kind)}  ${dim(s.file + loc)}`));
+        console.log(indent(s.description, 6));
+        if (s.before && s.after) {
+          console.log(indent(red("- " + s.before), 6));
+          console.log(indent(green("+ " + s.after), 6));
+        }
+        console.log();
+      }
+      const p1 = suggestions.filter(s => s.priority === 1).length;
+      const p2 = suggestions.filter(s => s.priority === 2).length;
+      const p3 = suggestions.filter(s => s.priority === 3).length;
+      console.log(indent(`${red(`${p1} must`)} · ${yellow(`${p2} should`)} · ${dim(`${p3} nice`)}`));
+    }
+    console.log();
+  });
+
 // ─── Command: deps ────────────────────────────────────────────────────────────
 
 program
@@ -1589,6 +1783,10 @@ ${bold("Examples:")}
   ast-map watch src/ --port 4321
   ast-map testgen src/utils.ts --framework vitest
   ast-map testgen src/ --uncovered --framework jest
+  ast-map smells src/
+  ast-map security src/ --severity high
+  ast-map diagram src/ --type deps -o graph.md --md
+  ast-map fix src/ --priority 2
 
 ${bold("Root:")}
   Defaults to cwd. Override with AST_MAP_ROOT=<path> or run from your project root.

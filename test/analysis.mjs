@@ -715,6 +715,188 @@ console.log("\n=== Symbol Search ===");
   check("testgen go: func Test prefix", goResult.content.includes("func Test"));
 }
 
+// ─── Code Smells ─────────────────────────────────────────────────────────────
+{
+  console.log("\n=== Code Smells ===");
+  const { detectSmells } = await import("../dist/smells.js");
+
+  // Build a full skeleton for sample.ts (has UserService class with methods)
+  const SAMPLE_TS = path.join(__dirname, "fixtures", "sample.ts");
+  const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+  const skel = await buildSkeleton(SAMPLE_TS, "sample.ts", skOpts);
+  const src = (await import("node:fs")).readFileSync(SAMPLE_TS, "utf8");
+  const lineCount = src.split("\n").length;
+
+  // No smells on small clean sample file
+  const smells = detectSmells(skel, lineCount);
+  check("detectSmells returns array", Array.isArray(smells));
+  check("small clean file has no god-class", !smells.some(s => s.smell === "god-class"));
+  check("small file has no large-file", !smells.some(s => s.smell === "large-file"));
+
+  // Synthetic skeleton: god class (11 public methods)
+  const godClassSkel = {
+    ...skel,
+    file: "god.ts",
+    symbols: [{
+      name: "GodClass", kind: "class", visibility: "public", exported: true,
+      range: { startLine: 1, endLine: 200 }, children: Array.from({ length: 11 }, (_, i) => ({
+        name: `method${i}`, kind: "method", visibility: "public", exported: false,
+        range: { startLine: i * 10 + 2, endLine: i * 10 + 8 }, children: [], signature: `method${i}(): void`
+      }))
+    }]
+  };
+  const godSmells = detectSmells(godClassSkel, 200);
+  check("god class detected (>10 methods)", godSmells.some(s => s.smell === "god-class" && s.symbol === "GodClass"));
+
+  // Long method
+  const longMethodSkel = { ...skel, file: "long.ts", symbols: [{
+    name: "bigFn", kind: "function", visibility: "public", exported: true,
+    range: { startLine: 1, endLine: 80 }, children: [], signature: "bigFn(x: string): void"
+  }]};
+  const longSmells = detectSmells(longMethodSkel, 80);
+  check("long-method detected (>60 lines)", longSmells.some(s => s.smell === "long-method" && s.symbol === "bigFn"));
+
+  // Long param list
+  const longParamSkel = { ...skel, file: "params.ts", symbols: [{
+    name: "tooManyParams", kind: "function", visibility: "public", exported: true,
+    range: { startLine: 1, endLine: 5 }, children: [],
+    signature: "tooManyParams(a: string, b: string, c: number, d: boolean, e: string): void"
+  }]};
+  const paramSmells = detectSmells(longParamSkel, 5);
+  check("long-param-list detected (>4 params)", paramSmells.some(s => s.smell === "long-param-list" && s.symbol === "tooManyParams"));
+
+  // Large file
+  const largeFileSmells = detectSmells(skel, 600);
+  check("large-file detected when lineCount > 500", largeFileSmells.some(s => s.smell === "large-file"));
+
+  // SmellResult shape
+  const gs = godSmells.find(s => s.smell === "god-class");
+  check("smell result has required fields", gs && typeof gs.file === "string" && typeof gs.message === "string" && typeof gs.severity === "string");
+}
+
+// ─── Security Scanning ────────────────────────────────────────────────────────
+{
+  console.log("\n=== Security Scanning ===");
+  const { scanFileForSecurityIssues, SECURITY_RULES } = await import("../dist/security.js");
+
+  check("SECURITY_RULES is a non-empty array", Array.isArray(SECURITY_RULES) && SECURITY_RULES.length > 0);
+
+  const evalCode = `const result = eval(userInput);\nconst x = 1;`;
+  const evalIssues = scanFileForSecurityIssues(evalCode, "test.ts");
+  check("eval() flagged as critical", evalIssues.some(i => i.rule === "eval" && i.severity === "critical"));
+  check("eval issue has line number", evalIssues.some(i => i.rule === "eval" && i.line === 1));
+
+  const innerHtmlCode = `el.innerHTML = userContent;\nfoo += 1;`;
+  const innerHtmlIssues = scanFileForSecurityIssues(innerHtmlCode, "test.js");
+  check("innerHTML assignment flagged as high", innerHtmlIssues.some(i => i.rule === "inner-html" && i.severity === "high"));
+
+  const weakCryptoCode = `const hash = crypto.createHash('md5').update(data).digest('hex');`;
+  const weakCryptoIssues = scanFileForSecurityIssues(weakCryptoCode, "test.ts");
+  check("weak-crypto md5 flagged", weakCryptoIssues.some(i => i.rule === "weak-crypto"));
+
+  const hardcodedSecretCode = `const password = "SuperSecret123";`;
+  const secretIssues = scanFileForSecurityIssues(hardcodedSecretCode, "config.ts");
+  check("hardcoded-secret flagged", secretIssues.some(i => i.rule === "hardcoded-secret" && i.severity === "high"));
+
+  // False positive guard: comment lines should be skipped
+  const commentedEval = `// eval(foo)\n// const x = eval(bar);`;
+  const commentIssues = scanFileForSecurityIssues(commentedEval, "test.ts");
+  check("commented-out eval not flagged", !commentIssues.some(i => i.rule === "eval"));
+
+  // http-url detection (non-localhost)
+  const httpCode = `const url = "http://api.example.com/data";`;
+  const httpIssues = scanFileForSecurityIssues(httpCode, "service.ts");
+  check("http:// url flagged as low", httpIssues.some(i => i.rule === "http-url"));
+
+  // localhost excluded from http-url
+  const localhostCode = `const devUrl = "http://localhost:3000/api";`;
+  const localhostIssues = scanFileForSecurityIssues(localhostCode, "dev.ts");
+  check("http://localhost not flagged", !localhostIssues.some(i => i.rule === "http-url"));
+
+  // Issue shape
+  const issue = evalIssues.find(i => i.rule === "eval");
+  check("issue has all required fields", issue && typeof issue.file === "string" && typeof issue.snippet === "string" && typeof issue.line === "number");
+}
+
+// ─── Mermaid Diagrams ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Mermaid Diagrams ===");
+  const { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } = await import("../dist/diagram.js");
+
+  const GRAPH_DIR = path.join(__dirname, "fixtures", "graph");
+  const dOpts = resolveOptions({ detail: "outline", emitHtml: false });
+  const dSkels = [];
+  for (const f of collectSourceFiles(GRAPH_DIR, dOpts)) {
+    const rel = path.relative(ROOT, f).split(path.sep).join("/");
+    dSkels.push(await buildSkeleton(f, rel, dOpts));
+  }
+  const dGraph = buildSymbolGraph(dSkels, ROOT);
+
+  // Class diagram
+  const SAMPLE_TS = path.join(__dirname, "fixtures", "sample.ts");
+  const skelOpts = resolveOptions({ detail: "outline", emitHtml: false });
+  const sampleSkel = await buildSkeleton(SAMPLE_TS, "sample.ts", skelOpts);
+  const classDiag = buildClassDiagram([sampleSkel]);
+  check("class diagram type is 'class'", classDiag.type === "class");
+  check("class diagram starts with classDiagram", classDiag.mermaid.startsWith("classDiagram"));
+  check("class diagram includes UserService", classDiag.mermaid.includes("UserService"));
+  check("class diagram nodeCount > 0", classDiag.nodeCount > 0);
+
+  // Deps diagram
+  const depsDiag = buildDepsDiagram(dGraph);
+  check("deps diagram type is 'deps'", depsDiag.type === "deps");
+  check("deps diagram starts with graph TD", depsDiag.mermaid.startsWith("graph TD"));
+  check("deps diagram nodeCount > 0", depsDiag.nodeCount > 0);
+  check("deps diagram edgeCount > 0", depsDiag.edgeCount > 0);
+
+  // Modules diagram
+  const modDiag = buildModulesDiagram(dGraph);
+  check("modules diagram type is 'modules'", modDiag.type === "modules");
+  check("modules diagram starts with graph LR", modDiag.mermaid.startsWith("graph LR"));
+
+  // DiagramResult shape
+  check("diagram result has mermaid string", typeof classDiag.mermaid === "string" && classDiag.mermaid.length > 0);
+  check("diagram result has title", typeof classDiag.title === "string");
+}
+
+// ─── Fix Suggestions ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== Fix Suggestions ===");
+  const { buildFixSuggestions } = await import("../dist/fix.js");
+  const { findDeadExports } = await import("../dist/graph-analysis.js");
+  const { detectSmells } = await import("../dist/smells.js");
+  const { scanFileForSecurityIssues } = await import("../dist/security.js");
+
+  // Empty input → no suggestions
+  const empty = buildFixSuggestions({});
+  check("empty opts returns empty array", Array.isArray(empty) && empty.length === 0);
+
+  // Dead export → remove-dead-export suggestion
+  const dead = [{ file: "src/utils.ts", symbol: "unusedFn", kind: "function", confidence: "high" }];
+  const fixesDead = buildFixSuggestions({ dead });
+  check("dead export generates remove-dead-export fix", fixesDead.some(f => f.kind === "remove-dead-export"));
+  check("dead export fix has priority 2", fixesDead.find(f => f.kind === "remove-dead-export")?.priority === 2);
+  check("dead export fix has before/after", fixesDead.find(f => f.kind === "remove-dead-export")?.before?.includes("export"));
+
+  // God class smell → split-class suggestion
+  const smells = [{ file: "src/big.ts", smell: "god-class", symbol: "BigClass", severity: "warning", message: "BigClass has 12 methods", line: 1 }];
+  const fixesSmell = buildFixSuggestions({ smells });
+  check("god-class generates split-class fix", fixesSmell.some(f => f.kind === "split-class"));
+
+  // Security eval → remove-eval suggestion
+  const security = [{ file: "src/eval.ts", rule: "eval", severity: "critical", message: "eval() detected", line: 5, snippet: "eval(x)" }];
+  const fixesSec = buildFixSuggestions({ security });
+  check("eval security issue generates remove-eval fix", fixesSec.some(f => f.kind === "remove-eval" && f.priority === 1));
+
+  // Priority filtering
+  const all = buildFixSuggestions({ dead, smells, security });
+  check("combined suggestions have varying priorities", all.some(f => f.priority === 1) && all.some(f => f.priority === 2));
+
+  // FixSuggestion shape
+  const fix = all[0];
+  check("fix suggestion has required fields", fix && typeof fix.kind === "string" && typeof fix.file === "string" && typeof fix.description === "string");
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);
