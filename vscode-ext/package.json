@@ -1,0 +1,147 @@
+{
+  "name": "ast-map",
+  "displayName": "AST Map",
+  "description": "Live code health: complexity lenses, dead-export diagnostics, one-click test generation, Mermaid diagrams — powered by ast-map CLI.",
+  "version": "1.0.0",
+  "publisher": "ast-map",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other", "Linters", "Testing"],
+  "keywords": ["ast", "complexity", "dead-code", "testgen", "mermaid", "code-health"],
+  "icon": "icon.png",
+  "repository": { "type": "git", "url": "https://github.com/6ixthxense/ast-mcp" },
+  "license": "MIT",
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascriptreact",
+    "onLanguage:python",
+    "onLanguage:go",
+    "onLanguage:java",
+    "onLanguage:ruby"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "astMap.generateTests",
+        "title": "AST Map: Generate Tests",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "astMap.generateTestsAi",
+        "title": "AST Map: Generate Tests (AI)",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "astMap.runSmells",
+        "title": "AST Map: Detect Code Smells"
+      },
+      {
+        "command": "astMap.runSecurity",
+        "title": "AST Map: Scan Security Issues"
+      },
+      {
+        "command": "astMap.showDiagram",
+        "title": "AST Map: Show Dependency Diagram"
+      },
+      {
+        "command": "astMap.openReport",
+        "title": "AST Map: Open HTML Report"
+      },
+      {
+        "command": "astMap.refreshDiagnostics",
+        "title": "AST Map: Refresh Diagnostics"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "astMap.generateTests",
+          "when": "resourceLangId =~ /typescript|javascript|python|go|java|ruby/",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "astMap.generateTests",
+          "when": "resourceLangId =~ /typescript|javascript|python|go|java|ruby/",
+          "group": "astMap"
+        },
+        {
+          "command": "astMap.generateTestsAi",
+          "when": "resourceLangId =~ /typescript|javascript|python|go|java|ruby/",
+          "group": "astMap"
+        },
+        {
+          "command": "astMap.runSmells",
+          "when": "editorLangId =~ /typescript|javascript|python|go/",
+          "group": "astMap"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AST Map",
+      "properties": {
+        "astMap.cliPath": {
+          "type": "string",
+          "default": "ast-map",
+          "description": "Path to the ast-map CLI binary (default: resolves from PATH)"
+        },
+        "astMap.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show complexity scores as Code Lens above functions and classes"
+        },
+        "astMap.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Underline dead exports and security issues as VS Code diagnostics"
+        },
+        "astMap.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API key for AI-powered test generation (also reads ANTHROPIC_API_KEY env var)"
+        },
+        "astMap.complexityWarningThreshold": {
+          "type": "number",
+          "default": 10,
+          "description": "Cyclomatic complexity score at which a Code Lens turns yellow"
+        },
+        "astMap.complexityErrorThreshold": {
+          "type": "number",
+          "default": 20,
+          "description": "Cyclomatic complexity score at which a Code Lens turns red"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "astMapExplorer",
+          "title": "AST Map",
+          "icon": "$(symbol-structure)"
+        }
+      ]
+    },
+    "views": {
+      "astMapExplorer": [
+        {
+          "id": "astMap.issuesView",
+          "name": "Code Health Issues",
+          "icon": "$(warning)"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

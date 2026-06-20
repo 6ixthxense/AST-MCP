@@ -6,6 +6,29 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.33.0] — 2026-06-20 · AI testgen + VS Code extension
+
+### AI-powered test generation (`src/ai-testgen.ts`)
+- New `--ai` flag for `ast-map testgen` — sends source code + generated stubs to Claude API and
+  returns tests with **real assertions** instead of TODO placeholders.
+- Uses `node:https` (no new npm dep) to call `POST /v1/messages` on `api.anthropic.com`.
+- Auto-reads `ANTHROPIC_API_KEY`; `--api-key` and `--model` flags override per invocation.
+- `tryAiEnhanceTests()` never throws — falls back silently to stubs when key is absent.
+- Terminal output appended with `[AI]` tag; JSON output includes `aiEnhanced: boolean`.
+
+### VS Code Extension (`vscode-ext/`)
+- New standalone VS Code extension project (`@ast-map/vscode`):
+  - **Complexity Code Lens** — cyclomatic score shown above every function/class; yellow ≥10, red ≥20.
+  - **Dead-export diagnostics** — high-confidence dead exports underlined as `Warning`.
+  - **Security diagnostics** — critical/high issues shown as `Error`, medium/low as `Warning`.
+  - **Issues Tree View** — sidebar panel listing smells and security issues across the workspace.
+  - **Commands**: Generate Tests, Generate Tests (AI), Run Smells, Scan Security, Show Diagram, Open Report.
+  - **Status Bar** — shows live health score `AST B 82`; opens report on click.
+  - Configuration: `astMap.cliPath`, `astMap.enableCodeLens`, `astMap.enableDiagnostics`, `astMap.anthropicApiKey`.
+
+### Tests
+- `test/analysis.mjs` — +9 checks for `ai-testgen.ts` (graceful fallback, shape, 232 total, 0 failed).
+
 ## [1.28.0] — 2026-06-11 · Test coverage in the dashboard
 - The health dashboard (`ast-map report` / `get_codebase_report`) now surfaces
   v1.27's structural test coverage:

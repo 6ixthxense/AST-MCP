@@ -897,6 +897,41 @@ console.log("\n=== Symbol Search ===");
   check("fix suggestion has required fields", fix && typeof fix.kind === "string" && typeof fix.file === "string" && typeof fix.description === "string");
 }
 
+// ─── AI Testgen (unit, no API call) ──────────────────────────────────────────
+{
+  console.log("\n=== AI Testgen (module shape) ===");
+  const { tryAiEnhanceTests } = await import("../dist/ai-testgen.js");
+
+  // tryAiEnhanceTests should fall back gracefully when no API key is set
+  const fakeResult = {
+    sourceFile: "src/utils.ts",
+    testFilePath: "src/utils.test.ts",
+    framework: "vitest",
+    content: "describe('add', () => { it('should ...', () => { /* TODO */ }) })",
+    testCount: 1,
+  };
+
+  const env = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+
+  const fallback = await tryAiEnhanceTests(fakeResult, "export function add(a, b) { return a + b; }", "typescript", {});
+  check("tryAiEnhanceTests returns an object", typeof fallback === "object" && fallback !== null);
+  check("fallback has aiEnhanced=false when no key", fallback.aiEnhanced === false);
+  check("fallback preserves original content", fallback.content === fakeResult.content);
+  check("fallback has error field", typeof fallback.error === "string" && fallback.error.length > 0);
+  check("fallback has testCount", fallback.testCount === 1);
+  check("fallback has sourceFile", fallback.sourceFile === "src/utils.ts");
+  check("fallback has framework", fallback.framework === "vitest");
+
+  if (env !== undefined) process.env.ANTHROPIC_API_KEY = env;
+
+  // Verify the module exports the right shape
+  check("tryAiEnhanceTests is a function", typeof tryAiEnhanceTests === "function");
+
+  const { aiEnhanceTests } = await import("../dist/ai-testgen.js");
+  check("aiEnhanceTests is a function", typeof aiEnhanceTests === "function");
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

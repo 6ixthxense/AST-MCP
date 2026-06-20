@@ -24,6 +24,7 @@ import { appendHistory, loadHistory } from "./history.js";
 import { buildDashboardHtml } from "./dashboard.js";
 import { runQualityGate, BASELINE_FILENAME, type CheckThresholds } from "./check.js";
 import { generateTestFile, detectTestFramework, resolveTestPath, type TestFramework } from "./testgen.js";
+import { tryAiEnhanceTests } from "./ai-testgen.js";
 import { detectSmells, type SmellOptions } from "./smells.js";
 import { scanFileForSecurityIssues, SECURITY_RULES } from "./security.js";
 import { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } from "./diagram.js";
@@ -1390,10 +1391,14 @@ program
   .option("--all", "Include non-exported symbols too")
   .option("--uncovered", "Directory mode: only generate for files that have no tests yet")
   .option("--dry-run", "Print generated content to stdout, do not write files")
+  .option("--ai", "Use Claude API to fill in real assertions (requires ANTHROPIC_API_KEY)")
+  .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
+  .option("--model <id>", "Claude model ID (default: claude-sonnet-4-6)")
   .option("--json", "Output metadata as JSON")
   .action(async (inputPath: string, opts: {
     framework?: string; out?: string; all?: boolean;
-    uncovered?: boolean; dryRun?: boolean; json?: boolean;
+    uncovered?: boolean; dryRun?: boolean; ai?: boolean;
+    apiKey?: string; model?: string; json?: boolean;
   }) => {
     const { abs, rel } = resolveArg(inputPath);
     const isDir = fs.statSync(abs).isDirectory();
@@ -1401,17 +1406,31 @@ program
     const skOpts = resolveOptions({ detail: "full", emitHtml: false });
     const exportedOnly = !opts.all;
 
-    async function processFile(fileAbs: string, fileRel: string): Promise<{ written: boolean; skipped: boolean; result: ReturnType<typeof generateTestFile> }> {
+    const aiOpts = opts.ai ? { apiKey: opts.apiKey, model: opts.model } : null;
+
+    async function processFile(fileAbs: string, fileRel: string): Promise<{ written: boolean; skipped: boolean; result: ReturnType<typeof generateTestFile>; aiEnhanced?: boolean }> {
       const skel = await buildSkeleton(fileAbs, fileRel, skOpts);
-      const result = generateTestFile(skel, fileAbs, { framework: fw, exportedOnly, outDir: opts.out ? path.resolve(process.cwd(), opts.out) : undefined });
+      let result = generateTestFile(skel, fileAbs, { framework: fw, exportedOnly, outDir: opts.out ? path.resolve(process.cwd(), opts.out) : undefined });
 
       // Skip if no tests could be generated
       if (result.testCount === 0) return { written: false, skipped: true, result };
 
+      let aiEnhanced = false;
+      if (aiOpts) {
+        const sourceCode = fs.readFileSync(fileAbs, "utf8");
+        const aiResult = await tryAiEnhanceTests(result, sourceCode, skel.language, aiOpts);
+        if (aiResult.aiEnhanced) {
+          result = aiResult;
+          aiEnhanced = true;
+        } else if (aiResult.error) {
+          process.stderr.write(yellow("⚠") + ` AI testgen failed for ${fileRel}: ${aiResult.error}\n`);
+        }
+      }
+
       if (opts.dryRun) {
         console.log(bold(`\n── ${result.sourceFile} ──`) + dim(` → ${path.relative(process.cwd(), result.testFilePath)}`));
         console.log(result.content);
-        return { written: false, skipped: false, result };
+        return { written: false, skipped: false, result, aiEnhanced };
       }
 
       // Don't overwrite existing test files
@@ -1419,20 +1438,21 @@ program
 
       fs.mkdirSync(path.dirname(result.testFilePath), { recursive: true });
       fs.writeFileSync(result.testFilePath, result.content, "utf8");
-      return { written: true, skipped: false, result };
+      return { written: true, skipped: false, result, aiEnhanced };
     }
 
     if (!isDir) {
       // Single file mode
       try {
-        const { written, skipped, result } = await processFile(abs, rel);
-        if (opts.json) return jsonOut(result);
+        const { written, skipped, result, aiEnhanced } = await processFile(abs, rel);
+        if (opts.json) return jsonOut({ ...result, aiEnhanced });
         if (skipped && fs.existsSync(result.testFilePath)) {
           console.log(yellow("⚠") + ` test file already exists: ${path.relative(process.cwd(), result.testFilePath)}`);
         } else if (skipped) {
           console.log(dim("(no testable symbols found)"));
         } else if (written) {
-          console.log(green("✓") + ` ${path.relative(process.cwd(), result.testFilePath)}  ${dim(`(${result.testCount} stub(s), ${fw})`)}`);
+          const aiTag = aiEnhanced ? cyan(" [AI]") : "";
+          console.log(green("✓") + ` ${path.relative(process.cwd(), result.testFilePath)}  ${dim(`(${result.testCount} test(s), ${fw})`)}${aiTag}`);
         }
       } catch (e) {
         die(e instanceof Error ? e.message : String(e));
@@ -1452,21 +1472,22 @@ program
     }
 
     const results: ReturnType<typeof generateTestFile>[] = [];
-    let written = 0, skipped = 0, errors = 0;
+    let written = 0, skipped = 0, errors = 0, aiCount = 0;
 
     for (const fileAbs of filesToProcess) {
       const fileRel = path.relative(ROOT, fileAbs).split(path.sep).join("/");
       try {
-        const { written: w, skipped: s, result } = await processFile(fileAbs, fileRel);
+        const { written: w, skipped: s, result, aiEnhanced: ae } = await processFile(fileAbs, fileRel);
         results.push(result);
         if (w) written++;
         if (s) skipped++;
+        if (ae) aiCount++;
       } catch {
         errors++;
       }
     }
 
-    if (opts.json) return jsonOut({ directory: rel, framework: fw, written, skipped, errors, files: results });
+    if (opts.json) return jsonOut({ directory: rel, framework: fw, written, skipped, errors, aiEnhanced: aiCount, files: results });
 
     if (!opts.dryRun) {
       header(`Test Generation — ${rel}/  ${dim(`(${fw})`)}`);
@@ -1479,9 +1500,10 @@ program
             path.relative(process.cwd(), r.testFilePath),
             String(r.testCount),
           ]),
-        [["Source", 36], ["Test file", 40], ["Stubs", 5]],
+        [["Source", 36], ["Test file", 40], ["Tests", 5]],
       );
-      console.log(`\n  ${green(`${written} file(s) written`)}  ·  ${dim(`${skipped} skipped`)}`);
+      const aiTag = aiCount > 0 ? `  ·  ${cyan(`${aiCount} AI-enhanced`)}` : "";
+      console.log(`\n  ${green(`${written} file(s) written`)}  ·  ${dim(`${skipped} skipped`)}${aiTag}`);
       if (errors > 0) console.log(indent(yellow(`${errors} file(s) errored`)));
     }
     console.log();
@@ -1782,7 +1804,8 @@ ${bold("Examples:")}
   ast-map history
   ast-map watch src/ --port 4321
   ast-map testgen src/utils.ts --framework vitest
-  ast-map testgen src/ --uncovered --framework jest
+  ast-map testgen src/utils.ts --framework vitest --ai
+  ast-map testgen src/ --uncovered --framework jest --ai
   ast-map smells src/
   ast-map security src/ --severity high
   ast-map diagram src/ --type deps -o graph.md --md
