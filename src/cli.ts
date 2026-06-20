@@ -45,6 +45,11 @@ import { filterToGitChanged } from "./incremental.js";
 import { mergeCoverage, type CoverageFormat } from "./covmerge.js";
 import { loadPlugins, runPlugins, EXAMPLE_PLUGIN } from "./plugins.js";
 import { startServe } from "./serve.js";
+import { buildIndex, loadIndex, refreshIndex, getSkeletons as getIndexSkeletons, isIndexFresh } from "./indexstore.js";
+import { checkArchRules, loadArchRules } from "./arch-rules.js";
+import { interactivePatch } from "./patch.js";
+import { buildDocOutput, renderMarkdown, renderDocHtml, aiEnhanceDocs } from "./docgen.js";
+import { buildTfIdfVectors, cosineSearch, rerankWithClaude } from "./embeddings.js";
 import type { SkeletonFile } from "./types.js";
 
 import { parseRootsFromEnv } from "./roots.js";
@@ -102,6 +107,14 @@ function resolveArg(p: string): { abs: string; rel: string } {
 }
 
 async function gatherSkeletons(dirAbs: string, detail: "outline" | "full" = "outline"): Promise<SkeletonFile[]> {
+  // Use persistent index when available, fresh, and outline detail requested
+  if (detail === "outline") {
+    const store = loadIndex(ROOT);
+    if (store && isIndexFresh(store)) {
+      const prefix = path.relative(ROOT, dirAbs).split(path.sep).join("/");
+      return getIndexSkeletons(store, prefix || undefined);
+    }
+  }
   const opts = resolveOptions({ detail, emitHtml: false });
   const files = collectSourceFiles(dirAbs, opts);
   const items = files.map((f) => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
@@ -1304,13 +1317,39 @@ program
   .option("-l, --limit <n>", "Max results (default 20)", "20")
   .option("-k, --kind <kind>", "Filter by kind: function, class, interface, type, method, const…")
   .option("-e, --exported", "Only show exported symbols")
+  .option("--rerank", "Re-rank results with Claude API (requires ANTHROPIC_API_KEY)")
+  .option("--api-key <key>", "Anthropic API key for --rerank")
   .option("--json", "Output as JSON")
-  .action(async (query: string, dir: string | undefined, opts: { limit?: string; kind?: string; exported?: boolean; json?: boolean }) => {
+  .action(async (query: string, dir: string | undefined, opts: { limit?: string; kind?: string; exported?: boolean; rerank?: boolean; apiKey?: string; json?: boolean }) => {
     const searchDir = dir ?? ".";
     const { abs, rel } = resolveArg(searchDir);
     if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
 
     const limit = Math.max(1, parseInt(opts.limit ?? "20", 10) || 20);
+
+    // TF-IDF embeddings path when --rerank is set
+    if (opts.rerank) {
+      const skeletons = await gatherSkeletons(abs);
+      const vectors = buildTfIdfVectors(skeletons);
+      let results = cosineSearch(vectors, query, limit);
+      if (opts.kind) results = results.filter(m => m.kind === opts.kind);
+      console.log(dim("Re-ranking with Claude…"));
+      results = await rerankWithClaude(results, query, { apiKey: opts.apiKey });
+      if (opts.json) return jsonOut({ directory: rel, query, matchCount: results.length, results });
+      header(`Semantic Search (re-ranked) — ${bold(`"${query}"`)} in ${rel}/`);
+      if (results.length === 0) {
+        console.log(indent(dim("No matches found.")));
+      } else {
+        table(
+          results.map((m, i) => [String(i + 1), m.file, m.symbol, m.kind, m.score.toFixed(3)]),
+          [["#", 3], ["File", 38], ["Symbol", 28], ["Kind", 10], ["Score", 6]],
+        );
+        console.log(`\n  ${results.length} match(es)`);
+      }
+      console.log();
+      return;
+    }
+
     const matches = await semanticSearch(abs, query, ROOT, {
       limit,
       kind: opts.kind,
@@ -2136,6 +2175,183 @@ program
     console.log();
   });
 
+// ─── Command: index ───────────────────────────────────────────────────────────
+
+program
+  .command("index [dir]")
+  .description("Build or refresh the persistent skeleton index (.ast-map/index.json) for faster analysis")
+  .option("--force", "Rebuild all files, ignoring cached hashes")
+  .option("--json", "Output build stats as JSON")
+  .action(async (dir: string | undefined, opts: { force?: boolean; json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    if (opts.force) {
+      const indexFile = path.join(ROOT, ".ast-map", "index.json");
+      try { fs.unlinkSync(indexFile); } catch { /* fine */ }
+    }
+
+    console.log(dim(`Building index for ${rel}/…`));
+    const t0 = Date.now();
+    const store = await buildIndex(ROOT, abs);
+    const elapsed = Date.now() - t0;
+
+    if (opts.json) return jsonOut({ root: ROOT, scanDir: abs, fileCount: store.fileCount, builtAt: store.builtAt, elapsedMs: elapsed });
+
+    console.log(green("✓") + ` Index built — ${bold(String(store.fileCount))} files in ${elapsed}ms`);
+    console.log(dim(`  Saved to ${path.join(ROOT, ".ast-map", "index.json")}`));
+    console.log();
+  });
+
+// ─── Command: arch ────────────────────────────────────────────────────────────
+
+program
+  .command("arch [dir]")
+  .description("Check architecture import rules from .ast-map.json (arch.rules)")
+  .option("--json", "Output as JSON")
+  .action(async (dir: string | undefined, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const projectConfig = loadProjectConfig(ROOT);
+    const rules = loadArchRules(projectConfig);
+
+    if (rules.length === 0) {
+      console.log(yellow("⚠") + ` No architecture rules found in .ast-map.json`);
+      console.log(dim(`  Add an "arch": { "rules": [...] } section to .ast-map.json`));
+      return;
+    }
+
+    const skeletons = await gatherSkeletons(abs);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const violations = checkArchRules(graph, rules);
+
+    if (opts.json) return jsonOut({ directory: rel, ruleCount: rules.length, violationCount: violations.length, violations });
+
+    header(`Architecture Rules — ${rel}/  ${dim(`(${rules.length} rule(s))`)}`);
+    if (violations.length === 0) {
+      console.log(indent(green("✓ No architecture violations.")));
+    } else {
+      for (const v of violations) {
+        const icon = v.severity === "error" ? red("✗") : yellow("⚠");
+        console.log(indent(`${icon}  ${bold(v.rule)}`));
+        console.log(indent(dim(v.file), 6));
+        console.log(indent(v.message, 6));
+        console.log();
+      }
+      const errors = violations.filter(v => v.severity === "error").length;
+      console.log(indent(`${red(String(errors))} error(s) · ${yellow(String(violations.length - errors))} warning(s)`));
+      if (errors > 0) process.exitCode = 1;
+    }
+    console.log();
+  });
+
+// ─── Command: patch ───────────────────────────────────────────────────────────
+
+program
+  .command("patch [dir]")
+  .description("Auto-patch: send smells/security issues to Claude, show colored diff, apply with y/n")
+  .option("--severity <level>", "Min security severity to patch: critical|high|medium|low", "high")
+  .option("--smells-only", "Only patch code smells (skip security)")
+  .option("--security-only", "Only patch security issues (skip smells)")
+  .option("-y, --yes", "Apply all patches without prompting")
+  .option("--api-key <key>", "Anthropic API key")
+  .option("--model <id>", "Claude model ID")
+  .option("--json", "Output results as JSON")
+  .action(async (dir: string | undefined, opts: { severity: string; smellsOnly?: boolean; securityOnly?: boolean; yes?: boolean; apiKey?: string; model?: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) die("ANTHROPIC_API_KEY not set — pass --api-key or set the env var");
+
+    const skeletons = await gatherSkeletons(abs, "full");
+    const patchIssues: Parameters<typeof interactivePatch>[0] = [];
+
+    for (const skel of skeletons) {
+      const fileAbs = path.resolve(ROOT, skel.file);
+      let src: string;
+      try { src = fs.readFileSync(fileAbs, "utf8"); } catch { continue; }
+
+      if (!opts.securityOnly) {
+        const smells = detectSmells(skel, src.split("\n").length);
+        for (const smell of smells) {
+          patchIssues.push({ kind: "smell", smell, filePath: fileAbs, sourceCode: src, language: skel.language });
+        }
+      }
+
+      if (!opts.smellsOnly) {
+        const sevOrder = ["critical", "high", "medium", "low"];
+        const minIdx = sevOrder.indexOf(opts.severity);
+        const secIssues = scanFileForSecurityIssues(src, skel.file)
+          .filter(i => sevOrder.indexOf(i.severity) <= minIdx);
+        for (const issue of secIssues) {
+          patchIssues.push({ kind: "security", security: issue, filePath: fileAbs, sourceCode: src, language: skel.language });
+        }
+      }
+    }
+
+    if (patchIssues.length === 0) {
+      console.log(green("✓") + " No issues found to patch.");
+      return;
+    }
+
+    console.log(dim(`Found ${patchIssues.length} issue(s) to patch in ${rel}/`));
+    const results = await interactivePatch(patchIssues, { apiKey, model: opts.model, yes: opts.yes });
+
+    if (opts.json) return jsonOut({ directory: rel, results });
+
+    const applied = results.filter(r => r.applied).length;
+    console.log(`\n${green("✓")} ${applied}/${results.length} patch(es) applied`);
+    console.log();
+  });
+
+// ─── Command: doc ─────────────────────────────────────────────────────────────
+
+program
+  .command("doc [dir]")
+  .description("Generate Markdown + HTML API docs from skeletons")
+  .option("-o, --out <file>", "Output file (default: stdout for md, .ast-map/api.html for html)")
+  .option("--html", "Emit HTML instead of Markdown")
+  .option("--exported-only", "Only include exported symbols (default: true)", true)
+  .option("--ai", "Use Claude API to add descriptions (requires ANTHROPIC_API_KEY)")
+  .option("--api-key <key>", "Anthropic API key")
+  .option("--model <id>", "Claude model ID")
+  .option("--json", "Output raw DocOutput JSON")
+  .action(async (dir: string | undefined, opts: { out?: string; html?: boolean; exportedOnly: boolean; ai?: boolean; apiKey?: string; model?: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs, "full");
+    let output = buildDocOutput(skeletons, { exportedOnly: opts.exportedOnly });
+
+    if (opts.ai) {
+      const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) die("ANTHROPIC_API_KEY not set — pass --api-key or set the env var");
+      console.log(dim("Enhancing descriptions with Claude…"));
+      output = await aiEnhanceDocs(output, { apiKey, model: opts.model });
+    }
+
+    if (opts.json) return jsonOut(output);
+
+    if (opts.html) {
+      const html = renderDocHtml(output);
+      const outFile = opts.out ?? path.join(ROOT, ".ast-map", "api.html");
+      fs.mkdirSync(path.dirname(outFile), { recursive: true });
+      fs.writeFileSync(outFile, html, "utf8");
+      console.log(green("✓") + ` HTML API docs → ${outFile}`);
+    } else {
+      const md = renderMarkdown(output);
+      if (opts.out) {
+        fs.writeFileSync(opts.out, md, "utf8");
+        console.log(green("✓") + ` Markdown API docs → ${opts.out}`);
+      } else {
+        console.log(md);
+      }
+    }
+    console.log();
+  });
+
 // ─── Root metadata ────────────────────────────────────────────────────────────
 
 program
@@ -2178,6 +2394,14 @@ ${bold("Examples:")}
   ast-map plugins src/
   ast-map smells src/ --changed-since HEAD
   ast-map security src/ --changed-since main
+  ast-map index src/
+  ast-map arch src/
+  ast-map patch src/ --severity high
+  ast-map patch src/ -y
+  ast-map doc src/
+  ast-map doc src/ --html -o .ast-map/api.html
+  ast-map doc src/ --ai
+  ast-map find "parse config" src/ --rerank
 
 ${bold("Root:")}
   Defaults to cwd. Override with AST_MAP_ROOT=<path> or run from your project root.

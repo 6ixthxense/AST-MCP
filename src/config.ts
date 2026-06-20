@@ -67,6 +67,17 @@ export interface AstMapConfig {
     "too-many-imports"?: ValidationRuleConfig;
     "god-export"?: ValidationRuleConfig;
   };
+  /** Architecture import rules (forbid/require import patterns). */
+  arch?: {
+    rules: Array<{
+      name?: string;
+      from: string;
+      forbidImport?: string;
+      requireImport?: string;
+      severity?: "error" | "warning";
+      message?: string;
+    }>;
+  };
 }
 
 let _configCache: { root: string; mtime: number; config: AstMapConfig } | null = null;

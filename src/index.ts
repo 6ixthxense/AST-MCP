@@ -58,6 +58,9 @@ import { buildExplainResult, aiExplain } from "./explain.js";
 import { findSimilar } from "./similar.js";
 import { mergeCoverage, detectFormat, type CoverageFormat } from "./covmerge.js";
 import { loadPlugins, runPlugins } from "./plugins.js";
+import { buildIndex, loadIndex, getSkeletons as getIndexSkeletons, isIndexFresh } from "./indexstore.js";
+import { checkArchRules, loadArchRules } from "./arch-rules.js";
+import { buildDocOutput, renderMarkdown, renderDocHtml, aiEnhanceDocs } from "./docgen.js";
 
 import { parseRootsFromEnv, resolvePathInRoots, type ResolvedPath } from "./roots.js";
 
@@ -2099,6 +2102,102 @@ server.registerResource(
     return {
       contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(graph, null, 2) }],
     };
+  },
+);
+
+/* --------------------------- tool: build_index -------------------------------- */
+server.registerTool(
+  "build_index",
+  {
+    title: "Build persistent skeleton index",
+    description:
+      "Builds or refreshes the persistent skeleton index at .ast-map/index.json. " +
+      "Subsequent commands read from the index (hash-verified) for 10-100x faster analysis.",
+    inputSchema: {
+      dir: z.string().optional().describe("Directory to scan (default: root)."),
+      force: z.boolean().optional().describe("Rebuild all files, ignoring cached hashes."),
+    },
+  },
+  async ({ dir, force }) => {
+    const { abs } = dir ? resolveInRoot(dir) : { abs: ROOT };
+    if (force) {
+      const indexFile = path.join(ROOT, ".ast-map", "index.json");
+      try { fs.unlinkSync(indexFile); } catch { /* fine */ }
+    }
+    const t0 = Date.now();
+    const store = await buildIndex(ROOT, abs);
+    return jsonText({ root: ROOT, scanDir: abs, fileCount: store.fileCount, builtAt: store.builtAt, elapsedMs: Date.now() - t0 });
+  },
+);
+
+/* ------------------------- tool: check_arch_rules ----------------------------- */
+server.registerTool(
+  "check_arch_rules",
+  {
+    title: "Check architecture import rules",
+    description:
+      "Enforces forbidden/required import rules declared in .ast-map.json under `arch.rules`. " +
+      "Returns a list of violations with severity (error | warning).",
+    inputSchema: {
+      dir: z.string().optional().describe("Directory to scan (default: root)."),
+    },
+  },
+  async ({ dir }) => {
+    const { abs } = dir ? resolveInRoot(dir) : { abs: ROOT };
+    const projectConfig = loadProjectConfig(ROOT);
+    const rules = loadArchRules(projectConfig);
+    if (rules.length === 0) return jsonText({ message: "No arch rules configured. Add arch.rules to .ast-map.json.", violations: [] });
+
+    let skeletons: SkeletonFile[];
+    const store = loadIndex(ROOT);
+    if (store && isIndexFresh(store)) {
+      const prefix = path.relative(ROOT, abs).split(path.sep).join("/");
+      skeletons = getIndexSkeletons(store, prefix || undefined);
+    } else {
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+      const built = await buildSkeletonsBulk(items, opts);
+      skeletons = built.filter(Boolean).map(r => r!.skel);
+    }
+
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const violations = checkArchRules(graph, rules);
+    return jsonText({ ruleCount: rules.length, violationCount: violations.length, violations });
+  },
+);
+
+/* --------------------------- tool: generate_docs ------------------------------ */
+server.registerTool(
+  "generate_docs",
+  {
+    title: "Generate API documentation",
+    description:
+      "Generates Markdown or HTML API documentation from the skeleton of a directory. " +
+      "Optionally enhances descriptions with Claude (requires ANTHROPIC_API_KEY).",
+    inputSchema: {
+      dir: z.string().optional().describe("Directory to document (default: root)."),
+      format: z.enum(["markdown", "html"]).optional().describe("Output format (default: markdown)."),
+      exportedOnly: z.boolean().optional().describe("Include only exported symbols (default: true)."),
+      ai: z.boolean().optional().describe("Use Claude API to add symbol descriptions."),
+      apiKey: z.string().optional().describe("Anthropic API key (overrides env var)."),
+    },
+  },
+  async ({ dir, format, exportedOnly, ai, apiKey }) => {
+    const { abs } = dir ? resolveInRoot(dir) : { abs: ROOT };
+    const opts = resolveOptions({ detail: "full", emitHtml: false });
+    const files = collectSourceFiles(abs, opts);
+    const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+    const built = await buildSkeletonsBulk(items, opts);
+    const skeletons = built.filter(Boolean).map(r => r!.skel);
+
+    let output = buildDocOutput(skeletons, { exportedOnly: exportedOnly !== false });
+    if (ai) {
+      output = await aiEnhanceDocs(output, { apiKey: apiKey ?? process.env.ANTHROPIC_API_KEY });
+    }
+
+    const rendered = format === "html" ? renderDocHtml(output) : renderMarkdown(output);
+    return { content: [{ type: "text" as const, text: rendered }] };
   },
 );
 

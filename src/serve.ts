@@ -18,12 +18,33 @@ export interface ServeOptions {
   root: string;
   scanDir?: string;
   open?: boolean;
+  /** Enable fs.watch and push SSE events to connected clients. */
+  watch?: boolean;
 }
 
 export async function startServe(opts: ServeOptions): Promise<http.Server> {
   const root = opts.root;
   const scanDir = opts.scanDir ?? root;
   const port = opts.port ?? 7337;
+
+  // SSE client registry
+  const sseClients = new Set<http.ServerResponse>();
+  function broadcastChange() {
+    for (const client of sseClients) {
+      try { client.write("event: change\ndata: {}\n\n"); } catch { sseClients.delete(client); }
+    }
+  }
+
+  // fs.watch for live reload
+  if (opts.watch) {
+    try {
+      fs.watch(scanDir, { recursive: true }, (_event, filename) => {
+        if (!filename || filename.includes(".ast-map")) return;
+        cache = null;
+        broadcastChange();
+      });
+    } catch { /* watch not supported on all platforms */ }
+  }
 
   let cache: { skeletons: SkeletonFile[]; ts: number } | null = null;
   const CACHE_TTL = 5000;
@@ -122,6 +143,19 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
         const skeletons = await getSkeletons();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(skeletons, null, 2));
+        return;
+      }
+
+      if (pathname === "/events") {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.write("event: connected\ndata: {}\n\n");
+        sseClients.add(res);
+        req.on("close", () => sseClients.delete(res));
         return;
       }
 

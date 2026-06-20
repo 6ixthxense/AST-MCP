@@ -32,7 +32,7 @@ export interface AiRefactorOptions {
 
 // ─── Anthropic API ────────────────────────────────────────────────────────────
 
-async function callClaude(prompt: string, opts: AiRefactorOptions): Promise<string> {
+export async function callClaude(prompt: string, opts: AiRefactorOptions): Promise<string> {
   const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("No Anthropic API key — set ANTHROPIC_API_KEY or pass --api-key");
 
