@@ -328,6 +328,13 @@ function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 loadAll();
+
+// ─── Live reload via SSE ──────────────────────────────────────────────────────
+(function connectSSE() {
+  const es = new EventSource('http://localhost:${port}/events');
+  es.addEventListener('change', () => loadAll());
+  es.addEventListener('error', () => { es.close(); setTimeout(connectSSE, 3000); });
+})();
 </script>
 </body>
 </html>`;

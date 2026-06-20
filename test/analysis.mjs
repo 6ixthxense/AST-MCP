@@ -1184,6 +1184,233 @@ export default {
   fs2.rmSync(tmpDir, { recursive: true, force: true });
 }
 
+// ─── Index Store (unit) ──────────────────────────────────────────────────────
+{
+  console.log("\n=== Index Store ===");
+  const { buildIndex, loadIndex, saveIndex, hashFile, isIndexFresh, getSkeletons } = await import("../dist/indexstore.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("buildIndex is a function", typeof buildIndex === "function");
+  check("loadIndex is a function", typeof loadIndex === "function");
+  check("hashFile is a function", typeof hashFile === "function");
+  check("isIndexFresh is a function", typeof isIndexFresh === "function");
+  check("getSkeletons is a function", typeof getSkeletons === "function");
+
+  // hashFile returns '' for missing file
+  check("hashFile returns '' for missing file", hashFile("/nonexistent/file.ts") === "");
+
+  // hashFile returns 16-char hex for real file
+  const hash = hashFile(path.join(ROOT, "package.json"));
+  check("hashFile returns 16-char hex for real file", /^[0-9a-f]{16}$/.test(hash));
+
+  // loadIndex returns null for missing store
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-idx-"));
+  check("loadIndex returns null when no index exists", loadIndex(tmpDir) === null);
+
+  // Build a real index from the graph fixture
+  const store = await buildIndex(tmpDir, GRAPH_DIR);
+  check("buildIndex returns a store", store && typeof store === "object");
+  check("store has version", typeof store.version === "string");
+  check("store has fileCount > 0", store.fileCount > 0);
+  check("store has entries object", typeof store.entries === "object");
+  check("store entries count matches fileCount", Object.keys(store.entries).length === store.fileCount);
+
+  // loadIndex reads back the saved store
+  const loaded = loadIndex(tmpDir);
+  check("loadIndex reads saved store", loaded !== null && loaded.fileCount === store.fileCount);
+  check("loaded store is fresh (no file changes)", isIndexFresh(loaded));
+
+  // getSkeletons returns all skeletons from store
+  const skels = getSkeletons(loaded);
+  check("getSkeletons returns array of skeletons", Array.isArray(skels) && skels.length > 0);
+  check("skeleton has file property", typeof skels[0]?.file === "string");
+
+  // Incremental rebuild: second call reuses cache
+  const store2 = await buildIndex(tmpDir, GRAPH_DIR);
+  check("second buildIndex reuses entries (same fileCount)", store2.fileCount === store.fileCount);
+
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+// ─── Architecture Rules (unit) ────────────────────────────────────────────────
+{
+  console.log("\n=== Architecture Rules ===");
+  const { checkArchRules, loadArchRules } = await import("../dist/arch-rules.js");
+
+  check("checkArchRules is a function", typeof checkArchRules === "function");
+  check("loadArchRules is a function", typeof loadArchRules === "function");
+
+  // loadArchRules returns [] when no arch config
+  check("loadArchRules returns [] with empty config", Array.isArray(loadArchRules({}) ) && loadArchRules({}).length === 0);
+
+  // No violations with empty rules
+  const emptyViolations = checkArchRules({ nodes: [], edges: [], stats: { fileCount: 0, symbolNodeCount: 0, edgeCount: 0 } }, []);
+  check("empty rules → no violations", emptyViolations.length === 0);
+
+  // Synthetic graph: ui.ts imports api.ts; rule forbids ui/ from importing api/
+  const syntheticGraph = {
+    nodes: [
+      { id: "ui/app.ts", nodeType: "file" },
+      { id: "api/service.ts", nodeType: "file" },
+    ],
+    edges: [
+      { from: "ui/app.ts", to: "api/service.ts", edgeType: "imports" },
+    ],
+    stats: { fileCount: 2, symbolNodeCount: 0, edgeCount: 1 },
+  };
+
+  // forbidImport rule: ui/** must not import api/**
+  const forbidRule = [{ from: "ui/**", forbidImport: "api/**", severity: "error" }];
+  const forbidViolations = checkArchRules(syntheticGraph, forbidRule);
+  check("forbidImport rule detects violation", forbidViolations.length >= 1);
+  check("violation has error severity", forbidViolations[0]?.severity === "error");
+  check("violation message mentions the file", forbidViolations[0]?.message.includes("ui/app.ts"));
+
+  // requireImport rule: ui/** must import something from utils/ (doesn't)
+  const requireRule = [{ from: "ui/**", requireImport: "utils/**", severity: "warning" }];
+  const requireViolations = checkArchRules(syntheticGraph, requireRule);
+  check("requireImport rule fires when import is missing", requireViolations.length >= 1);
+  check("requireImport violation is warning", requireViolations[0]?.severity === "warning");
+
+  // Non-matching rule: does not produce violations
+  const noMatchRule = [{ from: "other/**", forbidImport: "api/**" }];
+  const noViolations = checkArchRules(syntheticGraph, noMatchRule);
+  check("non-matching from pattern → no violations", noViolations.length === 0);
+
+  // ** glob matches nested paths
+  const deepGraph = {
+    nodes: [{ id: "src/ui/deep/comp.ts", nodeType: "file" }, { id: "src/db/repo.ts", nodeType: "file" }],
+    edges: [{ from: "src/ui/deep/comp.ts", to: "src/db/repo.ts", edgeType: "imports" }],
+    stats: { fileCount: 2, symbolNodeCount: 0, edgeCount: 1 },
+  };
+  const deepRule = [{ from: "src/ui/**", forbidImport: "src/db/**" }];
+  const deepViolations = checkArchRules(deepGraph, deepRule);
+  check("** glob matches nested directory paths", deepViolations.length >= 1);
+}
+
+// ─── Doc Generation (unit) ───────────────────────────────────────────────────
+{
+  console.log("\n=== Doc Generation ===");
+  const { buildDocOutput, renderMarkdown, renderDocHtml, aiEnhanceDocs } = await import("../dist/docgen.js");
+  const { resolveOptions } = await import("../dist/config.js");
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+
+  check("buildDocOutput is a function", typeof buildDocOutput === "function");
+  check("renderMarkdown is a function", typeof renderMarkdown === "function");
+  check("renderDocHtml is a function", typeof renderDocHtml === "function");
+  check("aiEnhanceDocs is a function", typeof aiEnhanceDocs === "function");
+
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+
+  const output = buildDocOutput(skels, { exportedOnly: true });
+  check("buildDocOutput returns object", output && typeof output === "object");
+  check("output has files array", Array.isArray(output.files));
+  check("output has totalSymbols > 0", output.totalSymbols > 0);
+  check("output has exportedSymbols > 0", output.exportedSymbols > 0);
+  check("exported ≤ total", output.exportedSymbols <= output.totalSymbols);
+
+  const md = renderMarkdown(output);
+  check("renderMarkdown returns string", typeof md === "string");
+  check("markdown starts with # API Reference", md.startsWith("# API Reference"));
+  check("markdown includes a symbol name", output.files[0]?.symbols[0]?.name && md.includes(output.files[0].symbols[0].name));
+
+  const html = renderDocHtml(output);
+  check("renderDocHtml returns string with DOCTYPE", html.includes("<!DOCTYPE html>"));
+  check("html contains API Reference heading", html.includes("API Reference"));
+  check("html contains table", html.includes("<table>"));
+
+  // exportedOnly=false includes more symbols
+  const outputAll = buildDocOutput(skels, { exportedOnly: false });
+  check("exportedOnly=false includes more/equal symbols", outputAll.totalSymbols >= output.totalSymbols);
+}
+
+// ─── Embeddings / TF-IDF (unit) ──────────────────────────────────────────────
+{
+  console.log("\n=== Embeddings / TF-IDF ===");
+  const { buildTfIdfVectors, cosineSearch, rerankWithClaude } = await import("../dist/embeddings.js");
+  const { resolveOptions } = await import("../dist/config.js");
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+
+  check("buildTfIdfVectors is a function", typeof buildTfIdfVectors === "function");
+  check("cosineSearch is a function", typeof cosineSearch === "function");
+  check("rerankWithClaude is a function", typeof rerankWithClaude === "function");
+
+  const opts = resolveOptions({ detail: "outline", emitHtml: false });
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+
+  // Build vectors
+  const vectors = buildTfIdfVectors(skels);
+  check("buildTfIdfVectors returns array", Array.isArray(vectors));
+  check("vectors count > 0", vectors.length > 0);
+  if (vectors.length > 0) {
+    check("vector has file, symbol, kind", typeof vectors[0].file === "string" && typeof vectors[0].symbol === "string");
+    check("vector has terms object", typeof vectors[0].terms === "object");
+    check("vector has norm >= 0", typeof vectors[0].norm === "number" && vectors[0].norm >= 0);
+  }
+
+  // Empty query → no results
+  const emptyResults = cosineSearch(vectors, "", 10);
+  check("empty query returns []", emptyResults.length === 0);
+
+  // Meaningful query finds results
+  const loginResults = cosineSearch(vectors, "login auth", 10);
+  check("cosineSearch returns array", Array.isArray(loginResults));
+  check("query 'login auth' returns results > 0", loginResults.length > 0);
+  if (loginResults.length > 0) {
+    check("result has file, symbol, kind, score", typeof loginResults[0].file === "string" && typeof loginResults[0].score === "number");
+    check("scores are sorted descending", loginResults.every((r, i) => i === 0 || loginResults[i - 1].score >= r.score));
+    check("score is positive", loginResults[0].score > 0);
+  }
+
+  // rerankWithClaude falls back gracefully with no API key
+  const env = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  const reranked = await rerankWithClaude(loginResults.slice(0, 3), "login auth");
+  check("rerankWithClaude returns array (fallback no key)", Array.isArray(reranked));
+  check("rerankWithClaude preserves items when no key", reranked.length === Math.min(3, loginResults.length));
+  if (env !== undefined) process.env.ANTHROPIC_API_KEY = env;
+}
+
+// ─── Patch (unit, no API call) ───────────────────────────────────────────────
+{
+  console.log("\n=== Patch (module shape) ===");
+  const { generatePatch, interactivePatch } = await import("../dist/patch.js");
+
+  check("generatePatch is a function", typeof generatePatch === "function");
+  check("interactivePatch is a function", typeof interactivePatch === "function");
+
+  // generatePatch without API key returns result with error field
+  const env = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+
+  const fakeIssue = {
+    kind: "smell",
+    smell: { file: "src/big.ts", smell: "god-class", symbol: "GodClass", severity: "warning", message: "GodClass has 15 methods", line: 1 },
+    filePath: "src/big.ts",
+    sourceCode: "class GodClass {}",
+    language: "typescript",
+  };
+
+  const result = await generatePatch(fakeIssue, {});
+  check("generatePatch returns object", typeof result === "object" && result !== null);
+  check("result has filePath", result.filePath === "src/big.ts");
+  check("result has issue label", typeof result.issue === "string" && result.issue.length > 0);
+  check("result has error when no API key", typeof result.error === "string");
+  check("result applied=false", result.applied === false);
+
+  if (env !== undefined) process.env.ANTHROPIC_API_KEY = env;
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

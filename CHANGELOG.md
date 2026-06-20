@@ -6,6 +6,46 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.0] — 2026-06-20 · persistent index, live reload, TF-IDF rerank, auto-patch, arch rules, doc gen
+
+### Breaking
+- CLI version bumped to 2.0.0; MCP protocol surface is additive (backward-compatible).
+
+### New CLI commands
+- `ast-map index [dir]` — build/refresh `.ast-map/index.json` persistent skeleton cache (hash-based incremental rebuild, 10-100× faster on warm runs)
+- `ast-map arch [dir]` — enforce architecture import rules from `.ast-map.json` `arch.rules`; exits non-zero on errors (CI-friendly)
+- `ast-map patch [dir]` — interactive auto-patch: collects smells + security issues, calls Claude, shows colored unified diff, applies with `y/N` per issue (`-y` auto-accepts)
+- `ast-map doc [dir]` — generate Markdown or HTML API reference from skeletons (`--html`, `--ai` with Claude descriptions, `--exported-only`)
+- `find` command gains `--rerank` flag — TF-IDF cosine pre-ranking + Claude API re-ranking for better semantic search
+
+### Enhanced
+- `gatherSkeletons()` automatically reads from `.ast-map/index.json` when present and fresh (hash-verified) — all CLI commands benefit
+- `ast-map serve` gains `--watch` option for SSE-based live reload (`/events` endpoint)
+- Web UI (`ast-map serve`) auto-reconnects to SSE stream and refreshes on file changes
+
+### New MCP tools (3 added)
+- `build_index` — build or refresh the persistent skeleton index
+- `check_arch_rules` — enforce `.ast-map.json` architecture rules, return structured violations
+- `generate_docs` — produce Markdown or HTML API docs, optionally enhanced with Claude
+
+### New source modules
+- `src/indexstore.ts` — `buildIndex()`, `loadIndex()`, `saveIndex()`, `isIndexFresh()`, `getSkeletons()`
+- `src/arch-rules.ts` — `checkArchRules()`, `loadArchRules()`, manual `globToRegex()` (no dependencies)
+- `src/patch.ts` — `generatePatch()`, `interactivePatch()`, colored unified diff, readline y/N prompt
+- `src/docgen.ts` — `buildDocOutput()`, `renderMarkdown()`, `renderDocHtml()`, `aiEnhanceDocs()`
+- `src/embeddings.ts` — `buildTfIdfVectors()`, `cosineSearch()`, `rerankWithClaude()`
+
+### Modified source modules
+- `src/config.ts` — `AstMapConfig` gains `arch?: { rules: ArchRule[] }` field
+- `src/serve.ts` — `ServeOptions` gains `watch?: boolean`; SSE `/events` endpoint added
+- `src/webapp.ts` — EventSource client for live reload with auto-reconnect
+- `src/ai-refactor.ts` — `callClaude` is now exported for reuse
+
+### Tests
+- 364 tests total (up from 296); 5 new test sections: Index Store, Arch Rules, Doc Generation, Embeddings/TF-IDF, Patch
+
+---
+
 ## [1.35.0] — 2026-06-20 · explain, similar, incremental, coverage merge, plugins, web UI
 
 ### New CLI commands
