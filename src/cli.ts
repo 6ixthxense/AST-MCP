@@ -39,6 +39,12 @@ import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import { semanticSearch } from "./semantic.js";
 import { mapTestCoverage } from "./testmap.js";
+import { buildExplainResult, aiExplain } from "./explain.js";
+import { findSimilar } from "./similar.js";
+import { filterToGitChanged } from "./incremental.js";
+import { mergeCoverage, type CoverageFormat } from "./covmerge.js";
+import { loadPlugins, runPlugins, EXAMPLE_PLUGIN } from "./plugins.js";
+import { startServe } from "./serve.js";
 import type { SkeletonFile } from "./types.js";
 
 import { parseRootsFromEnv } from "./roots.js";
@@ -1519,15 +1525,21 @@ program
   .option("--max-fields <n>", "God-class threshold: fields per class", (v) => parseInt(v, 10), 8)
   .option("--max-lines <n>", "Long-method threshold: lines per function", (v) => parseInt(v, 10), 60)
   .option("--max-params <n>", "Long-param-list threshold: parameters per function", (v) => parseInt(v, 10), 4)
+  .option("--changed-since <ref>", "Only scan files changed since this git ref (e.g. HEAD, main)")
   .option("--json", "Output as JSON")
-  .action(async (inputPath: string | undefined, opts: { maxMethods: number; maxFields: number; maxLines: number; maxParams: number; json?: boolean }) => {
+  .action(async (inputPath: string | undefined, opts: { maxMethods: number; maxFields: number; maxLines: number; maxParams: number; changedSince?: string; json?: boolean }) => {
     const { abs, rel } = resolveArg(inputPath ?? ".");
     const stat = fs.statSync(abs);
     const skOpts = resolveOptions({ detail: "full", emitHtml: false });
     const smellOpts: SmellOptions = { maxMethods: opts.maxMethods, maxFields: opts.maxFields, maxMethodLines: opts.maxLines, maxParams: opts.maxParams };
 
     const allSmells: ReturnType<typeof detectSmells> = [];
-    const filesToScan = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+    let filesToScan = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+    if (opts.changedSince && stat.isDirectory()) {
+      const { files, fromGit } = filterToGitChanged(filesToScan, ROOT, opts.changedSince);
+      filesToScan = files;
+      if (fromGit) console.log(dim(`(incremental: ${filesToScan.length} file(s) changed since ${opts.changedSince})`));
+    }
 
     for (const fileAbs of filesToScan) {
       const fileRel = path.relative(ROOT, fileAbs).split(path.sep).join("/");
@@ -1571,11 +1583,17 @@ program
   .description("Static security scan: eval, innerHTML, weak crypto, hardcoded secrets, SQLi, and more")
   .option("--json", "Output as JSON")
   .option("-s, --severity <level>", "Minimum severity: critical|high|medium|low", "low")
-  .action(async (inputPath: string | undefined, opts: { json?: boolean; severity: string }) => {
+  .option("--changed-since <ref>", "Only scan files changed since this git ref (e.g. HEAD, main)")
+  .action(async (inputPath: string | undefined, opts: { json?: boolean; severity: string; changedSince?: string }) => {
     const { abs, rel } = resolveArg(inputPath ?? ".");
     const stat = fs.statSync(abs);
     const skOpts = resolveOptions({ detail: "outline", emitHtml: false });
-    const filesToScan = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+    let filesToScan = stat.isDirectory() ? collectSourceFiles(abs, skOpts) : [abs];
+    if (opts.changedSince && stat.isDirectory()) {
+      const { files, fromGit } = filterToGitChanged(filesToScan, ROOT, opts.changedSince);
+      filesToScan = files;
+      if (fromGit) console.log(dim(`(incremental: ${filesToScan.length} file(s) changed since ${opts.changedSince})`));
+    }
     const severityRank = { critical: 4, high: 3, medium: 2, low: 1 };
     const minRank = severityRank[opts.severity as keyof typeof severityRank] ?? 1;
 
@@ -1816,7 +1834,17 @@ program
     }
     fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2) + "\n", "utf8");
     console.log(green("✓") + ` .ast-map.json created at ${configPath}`);
-    console.log(dim("  Edit it freely — ast-map reads it on every run."));
+
+    // Scaffold example plugin
+    const pluginsDir = path.join(ROOT, ".ast-map", "plugins");
+    const examplePlugin = path.join(pluginsDir, "example.mjs");
+    if (!fs.existsSync(examplePlugin)) {
+      fs.mkdirSync(pluginsDir, { recursive: true });
+      fs.writeFileSync(examplePlugin, EXAMPLE_PLUGIN, "utf8");
+      console.log(green("✓") + ` Example plugin scaffolded at ${examplePlugin}`);
+    }
+
+    console.log(dim("  Edit .ast-map.json freely — ast-map reads it on every run."));
     console.log();
   });
 
@@ -1900,6 +1928,214 @@ program
     console.log();
   });
 
+// ─── Command: explain ─────────────────────────────────────────────────────────
+
+program
+  .command("explain <file> <symbol>")
+  .description("Explain what a symbol does: purpose, callers, dependencies, change risk")
+  .option("--scan <dir>", "Directory to build the dependency graph from (default: file's directory)")
+  .option("--ai", "Use Claude API to generate a prose explanation (requires ANTHROPIC_API_KEY)")
+  .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
+  .option("--model <id>", "Claude model ID (default: claude-sonnet-4-6)")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string, symbolName: string, opts: { scan?: string; ai?: boolean; apiKey?: string; model?: string; json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath);
+    if (fs.statSync(abs).isDirectory()) die(`Provide a single file path, not a directory`);
+
+    const scanRoot = opts.scan ? resolveArg(opts.scan).abs : path.dirname(abs);
+    const skOpts = resolveOptions({ detail: "full", emitHtml: false });
+    const skel = await buildSkeleton(abs, rel, skOpts);
+
+    const skeletons = await gatherSkeletons(scanRoot);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const targetId = `${rel}::${symbolName}`;
+    const impact = getChangeImpact(graph, targetId);
+
+    const sourceCode = fs.readFileSync(abs, "utf8");
+    const lineCount = sourceCode.split("\n").length;
+    const smellMessages = detectSmells(skel, lineCount).map((s) => s.message);
+    const cx = await computeFileComplexity(abs, rel);
+    const fnCx = cx?.functions.find((f) => f.name === symbolName);
+
+    let result = buildExplainResult(symbolName, skel, graph, impact, smellMessages, fnCx?.rating);
+
+    if (opts.ai) {
+      try {
+        result = await aiExplain(result, sourceCode, { apiKey: opts.apiKey, model: opts.model });
+      } catch (e) {
+        process.stderr.write(yellow("⚠") + ` AI explain failed: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+    }
+
+    if (opts.json) return jsonOut(result);
+
+    header(`Explain — ${bold(symbolName)}  ${dim(rel)}`);
+    console.log(indent(`${bold("Kind:")}  ${result.kind}`));
+    if (result.signature) console.log(indent(`${bold("Sig:")}   ${dim(result.signature)}`));
+    const asyncTag = result.summary.isAsync ? cyan(" async") : "";
+    const expTag = result.summary.isExported ? green(" exported") : dim(" unexported");
+    console.log(indent(`${bold("Lines:")} ${result.summary.lineCount} · ${bold("Children:")} ${result.summary.childCount}${asyncTag}${expTag}`));
+    if (result.complexityRating) console.log(indent(`${bold("Complexity:")} ${result.complexityRating}`));
+
+    console.log(`\n${indent(`${bold("Used by")} ${dim(`(${result.summary.callerCount} file(s))`)}`)}`)
+    for (const f of result.summary.callerFiles.slice(0, 8)) console.log(indent(dim(f), 4));
+    if (result.summary.callerCount === 0) console.log(indent(dim("(none detected)"), 4));
+
+    if (result.summary.dependsOn.length > 0) {
+      console.log(`\n${indent(bold("Depends on"))}`);
+      for (const d of result.summary.dependsOn) console.log(indent(dim(d), 4));
+    }
+
+    if (result.smells.length > 0) {
+      console.log(`\n${indent(bold("Smells"))}`);
+      for (const s of result.smells) console.log(indent(yellow("⚠ ") + s, 4));
+    }
+
+    if (result.aiExplanation) {
+      console.log(`\n${indent(bold("AI Explanation"))}`);
+      for (const line of result.aiExplanation.split("\n")) console.log(indent(line, 4));
+    }
+    console.log();
+  });
+
+// ─── Command: similar ─────────────────────────────────────────────────────────
+
+program
+  .command("similar [dir]")
+  .description("Find structurally similar/duplicate functions via AST fingerprinting")
+  .option("--kinds <list>", "Comma-sep symbol kinds to check (default: function,method,class)", "function,method,class")
+  .option("--min <n>", "Min group size to report (default 2)", (v) => parseInt(v, 10), 2)
+  .option("--json", "Output as JSON")
+  .action(async (dir: string | undefined, opts: { kinds: string; min: number; json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs, "full");
+    const kinds = opts.kinds.split(",").map((k: string) => k.trim()).filter(Boolean);
+    const groups = findSimilar(skeletons, { minGroupSize: opts.min, kinds });
+
+    if (opts.json) return jsonOut({ directory: rel, groupCount: groups.length, groups });
+
+    header(`Similar Symbols — ${rel}/  ${dim(`(${skeletons.length} files, ${groups.length} group(s))`)}`);
+    if (groups.length === 0) {
+      console.log(indent(green("✓ No structurally similar symbol groups found.")));
+    } else {
+      for (const g of groups.slice(0, 20)) {
+        console.log(indent(`${yellow(`×${g.count}`)}  ${bold(g.description)}`));
+        for (const e of g.entries) {
+          const loc = dim(`${e.file}:${e.line}`);
+          console.log(indent(`${dim(col(e.kind, 9))} ${e.symbol}  ${loc}`, 6));
+        }
+        console.log();
+      }
+      console.log(indent(`${yellow(String(groups.length))} similar group(s) found`));
+    }
+    console.log();
+  });
+
+// ─── Command: serve ───────────────────────────────────────────────────────────
+
+program
+  .command("serve [dir]")
+  .description("Start an interactive web UI for code analysis (default port 7337)")
+  .option("-p, --port <n>", "Port to listen on (default 7337)", (v) => parseInt(v, 10), 7337)
+  .option("--open", "Open the browser after starting")
+  .action(async (dir: string | undefined, opts: { port: number; open?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const port = opts.port;
+    console.log(dim(`Serving ${rel}/  on port ${port}…`));
+    await startServe({ root: abs, scanDir: abs, port });
+    console.log(green("✓") + ` Web UI at ${cyan(`http://localhost:${port}`)}`);
+    console.log(dim("  Press Ctrl+C to stop."));
+
+    if (opts.open) {
+      const cp = await import("node:child_process");
+      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+      try { cp.execSync(`${cmd} http://localhost:${port}`); } catch { /* ignore */ }
+    }
+
+    await new Promise(() => {}); // keep process alive
+  });
+
+// ─── Command: covmerge ────────────────────────────────────────────────────────
+
+program
+  .command("covmerge <report>")
+  .description("Merge structural coverage map with an actual coverage report (Istanbul/lcov/Clover/Cobertura)")
+  .option("--dir <dir>", "Project directory to scan (default: .)", ".")
+  .option("-f, --format <fmt>", "Report format: auto|istanbul|lcov|clover|cobertura (default: auto)", "auto")
+  .option("--json", "Output as JSON")
+  .action(async (reportPath: string, opts: { dir: string; format: string; json?: boolean }) => {
+    const reportAbs = path.resolve(ROOT, reportPath);
+    if (!fs.existsSync(reportAbs)) die(`Coverage report not found: ${reportPath}`);
+
+    const { abs, rel } = resolveArg(opts.dir);
+    const skeletons = await gatherSkeletons(abs);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const structuralMap = mapTestCoverage(graph);
+    const merged = mergeCoverage(reportAbs, structuralMap, abs, opts.format as CoverageFormat);
+
+    if (opts.json) return jsonOut(merged);
+
+    const pct = Math.round(merged.summary.avgLineCoverage * 100);
+    const pcolor = pct >= 70 ? green : pct >= 40 ? yellow : red;
+    header(`Coverage Merge — ${rel}/  ${dim(`(${merged.format} format)`)}`);
+    console.log(indent(`${bold("Files:")}       ${merged.summary.totalFiles}  covered ${merged.summary.coveredFiles}`));
+    console.log(indent(`${bold("Line cov:")}    ${pcolor(`${pct}%`)}`));
+    if (merged.summary.avgBranchCoverage !== undefined) {
+      console.log(indent(`${bold("Branch cov:")}  ${Math.round(merged.summary.avgBranchCoverage * 100)}%`));
+    }
+    if (merged.deadTests.length > 0) {
+      console.log(`\n${indent(`${bold("Dead tests")} ${dim("(0% actual coverage)")}`)}`);
+      for (const f of merged.deadTests.slice(0, 10)) console.log(indent(red("✗ ") + f, 4));
+    }
+    if (merged.uncovered.length > 0) {
+      console.log(`\n${indent(`${bold("Uncovered")} ${dim("(no tests + 0% coverage)")}`)}`);
+      for (const f of merged.uncovered.slice(0, 15)) console.log(indent(dim("  " + f), 4));
+    }
+    console.log();
+  });
+
+// ─── Command: plugins ─────────────────────────────────────────────────────────
+
+program
+  .command("plugins [dir]")
+  .description("Run custom lint plugins from .ast-map/plugins/ (*.mjs / *.js)")
+  .option("--json", "Output as JSON")
+  .action(async (dir: string | undefined, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const plugins = await loadPlugins(abs);
+    if (plugins.length === 0) {
+      console.log(dim(`No plugins found in ${path.join(rel, ".ast-map/plugins/")}`));
+      console.log(dim("  Run ast-map init to scaffold an example plugin."));
+      return;
+    }
+
+    const skeletons = await gatherSkeletons(abs);
+    const results = await runPlugins(plugins, { root: abs, skeletons });
+
+    if (opts.json) return jsonOut({ directory: rel, plugins: results });
+
+    const totalViolations = results.reduce((s, r) => s + r.violations.length, 0);
+    header(`Plugins — ${rel}/  ${dim(`(${plugins.length} plugin(s), ${totalViolations} violation(s))`)}`);
+
+    for (const r of results) {
+      const icon = r.error ? red("✗") : r.violations.length > 0 ? yellow("⚠") : green("✓");
+      console.log(indent(`${icon}  ${bold(r.pluginId)}  ${dim(r.description ?? "")}`));
+      if (r.error) console.log(indent(red(r.error), 6));
+      for (const v of r.violations) {
+        const loc = v.line ? dim(`:${v.line}`) : "";
+        const sevIcon = v.severity === "error" ? red("✗") : v.severity === "warning" ? yellow("⚠") : dim("ℹ");
+        console.log(indent(`${sevIcon}  ${dim(v.file + loc)}  ${v.message}`, 6));
+      }
+    }
+    console.log();
+  });
+
 // ─── Root metadata ────────────────────────────────────────────────────────────
 
 program
@@ -1934,6 +2170,14 @@ ${bold("Examples:")}
   ast-map fix src/ --ai
   ast-map init
   ast-map init --defaults
+  ast-map explain src/utils.ts buildReport
+  ast-map explain src/utils.ts buildReport --ai
+  ast-map similar src/
+  ast-map serve src/ --port 7337
+  ast-map covmerge coverage/coverage-summary.json --dir src/
+  ast-map plugins src/
+  ast-map smells src/ --changed-since HEAD
+  ast-map security src/ --changed-since main
 
 ${bold("Root:")}
   Defaults to cwd. Override with AST_MAP_ROOT=<path> or run from your project root.

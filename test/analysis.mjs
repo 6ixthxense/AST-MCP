@@ -975,6 +975,215 @@ console.log("\n=== Symbol Search ===");
   check("dist/lsp.js exists", (await import("node:fs")).existsSync(path.join(ROOT, "dist/lsp.js")));
 }
 
+// ─── Explain (unit, no API call) ─────────────────────────────────────────────
+{
+  console.log("\n=== Explain (module shape) ===");
+  const { buildExplainResult, aiExplain } = await import("../dist/explain.js");
+  const { resolveOptions } = await import("../dist/config.js");
+
+  check("buildExplainResult is a function", typeof buildExplainResult === "function");
+  check("aiExplain is a function", typeof aiExplain === "function");
+
+  // Build a result from a real skeleton
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const skel = await buildSkeleton(path.join(GRAPH_DIR, "auth.ts"), "auth.ts", opts);
+  const graph = await (async () => {
+    const { buildSymbolGraph } = await import("../dist/graph.js");
+    const { buildSkeletonsBulk } = await import("../dist/pool.js");
+    const { collectSourceFiles } = await import("../dist/skeleton.js");
+    const files = collectSourceFiles(GRAPH_DIR, opts);
+    const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+    const built = await buildSkeletonsBulk(items, opts);
+    const skels = built.filter(Boolean).map(r => r.skel);
+    return buildSymbolGraph(skels, ROOT);
+  })();
+
+  const result = buildExplainResult("login", skel, graph, null, [], "low");
+  check("result has symbol field", result.symbol === "login");
+  check("result has file field", typeof result.file === "string");
+  check("result has summary object", typeof result.summary === "object");
+  check("summary has callerFiles array", Array.isArray(result.summary.callerFiles));
+  check("summary has callerCount", typeof result.summary.callerCount === "number");
+  check("summary has dependsOn array", Array.isArray(result.summary.dependsOn));
+  check("summary has lineCount", result.summary.lineCount >= 0);
+  check("result has smells array", Array.isArray(result.smells));
+  check("result has complexityRating", result.complexityRating === "low");
+  check("no aiExplanation without AI call", result.aiExplanation === undefined);
+}
+
+// ─── Similar (unit) ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Similar symbols ===");
+  const { findSimilar } = await import("../dist/similar.js");
+  const { resolveOptions } = await import("../dist/config.js");
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+
+  check("findSimilar is a function", typeof findSimilar === "function");
+
+  const opts = resolveOptions({ detail: "full", emitHtml: false });
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+
+  const groups = findSimilar(skels, { minGroupSize: 2 });
+  check("findSimilar returns an array", Array.isArray(groups));
+  if (groups.length > 0) {
+    const g = groups[0];
+    check("group has fingerprint", typeof g.fingerprint === "string");
+    check("group has description", typeof g.description === "string");
+    check("group has count >= 2", g.count >= 2);
+    check("group has entries array", Array.isArray(g.entries));
+    check("entry has file, symbol, kind, line", typeof g.entries[0].file === "string" && typeof g.entries[0].symbol === "string");
+  } else {
+    check("findSimilar returns empty array (no groups found)", true);
+  }
+
+  // Verify it respects kinds filter
+  const noClasses = findSimilar(skels, { kinds: ["function"] });
+  check("kinds filter excludes class entries", noClasses.every(g => g.entries.every(e => e.kind !== "class")));
+}
+
+// ─── Incremental (unit) ──────────────────────────────────────────────────────
+{
+  console.log("\n=== Incremental analysis ===");
+  const { loadState, saveState, detectChanges, hashFile, hashFiles } = await import("../dist/incremental.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("loadState returns null for missing dir", loadState("/nonexistent/path") === null);
+  check("hashFile returns '' for missing file", hashFile("/nonexistent/file.ts") === "");
+
+  // Save and reload state
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-test-"));
+  const file1 = path.join(ROOT, "package.json");
+  const hashes = hashFiles([file1], ROOT);
+  check("hashFiles returns record", typeof hashes === "object" && Object.keys(hashes).length === 1);
+  check("hash is a hex string", /^[0-9a-f]{16}$/.test(Object.values(hashes)[0]));
+
+  const state = saveState(tmpDir, hashes);
+  check("saveState returns IncrementalState", state && typeof state.hashes === "object" && typeof state.lastRun === "string");
+
+  const loaded = loadState(tmpDir);
+  check("loadState returns saved state", loaded !== null && loaded.root === tmpDir);
+
+  const changes = detectChanges([file1], ROOT, loaded);
+  check("detectChanges finds unchanged files", changes.unchanged.length === 1);
+  check("detectChanges has no new changes", changes.changed.length === 0);
+
+  const noState = detectChanges([file1], ROOT, null);
+  check("null state → all files changed", noState.changed.length === 1);
+
+  // Cleanup
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+// ─── Coverage Merge (unit) ────────────────────────────────────────────────────
+{
+  console.log("\n=== Coverage merge ===");
+  const { detectFormat, mergeCoverage } = await import("../dist/covmerge.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("detectFormat is a function", typeof detectFormat === "function");
+  check("mergeCoverage is a function", typeof mergeCoverage === "function");
+  check("detectFormat .json → istanbul", detectFormat("/tmp/coverage-summary.json") === "istanbul");
+  check("detectFormat lcov.info → lcov", detectFormat("/tmp/lcov.info") === "lcov");
+  check("detectFormat clover.xml → clover", detectFormat("/tmp/clover.xml") === "clover");
+  check("detectFormat cobertura.xml → cobertura", detectFormat("/tmp/cobertura.xml") === "cobertura");
+
+  // Create a minimal Istanbul JSON report and merge it
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-cov-"));
+  const reportPath = path.join(tmpDir, "coverage-summary.json");
+  const fakeReport = {
+    "src/auth.ts": { lines: { total: 10, covered: 8, pct: 80 }, branches: { total: 4, covered: 3, pct: 75 } },
+    total: { lines: { total: 10, covered: 8, pct: 80 } },
+  };
+  fs2.writeFileSync(reportPath, JSON.stringify(fakeReport), "utf8");
+
+  const { mapTestCoverage } = await import("../dist/testmap.js");
+  const { buildSymbolGraph } = await import("../dist/graph.js");
+  const opts = (await import("../dist/config.js")).resolveOptions({ detail: "outline", emitHtml: false });
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+  const structuralMap = mapTestCoverage(buildSymbolGraph(skels, ROOT));
+
+  const merged = mergeCoverage(reportPath, structuralMap, GRAPH_DIR, "istanbul");
+  check("merged has format=istanbul", merged.format === "istanbul");
+  check("merged has reportPath", typeof merged.reportPath === "string");
+  check("merged.actual is an array", Array.isArray(merged.actual));
+  check("merged.summary has totalFiles", typeof merged.summary.totalFiles === "number");
+  check("merged.summary has avgLineCoverage", typeof merged.summary.avgLineCoverage === "number");
+  check("merged.enriched is an array", Array.isArray(merged.enriched));
+  check("merged.deadTests is an array", Array.isArray(merged.deadTests));
+  check("merged.uncovered is an array", Array.isArray(merged.uncovered));
+
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+// ─── Plugins (unit) ──────────────────────────────────────────────────────────
+{
+  console.log("\n=== Plugin system ===");
+  const { loadPlugins, runPlugins, EXAMPLE_PLUGIN } = await import("../dist/plugins.js");
+  const fs2 = await import("node:fs");
+  const os = await import("node:os");
+
+  check("loadPlugins is a function", typeof loadPlugins === "function");
+  check("runPlugins is a function", typeof runPlugins === "function");
+  check("EXAMPLE_PLUGIN is a string", typeof EXAMPLE_PLUGIN === "string" && EXAMPLE_PLUGIN.length > 0);
+  check("EXAMPLE_PLUGIN contains plugin id", EXAMPLE_PLUGIN.includes("no-console-in-lib"));
+
+  // loadPlugins returns empty array when dir doesn't exist
+  const empty = await loadPlugins("/nonexistent/dir");
+  check("loadPlugins returns [] for missing dir", Array.isArray(empty) && empty.length === 0);
+
+  // Create a temp plugin and run it
+  const tmpDir = fs2.mkdtempSync(path.join(os.tmpdir(), "ast-map-plugin-"));
+  const pluginsDir = path.join(tmpDir, ".ast-map", "plugins");
+  fs2.mkdirSync(pluginsDir, { recursive: true });
+
+  const pluginCode = `
+export default {
+  id: "test-plugin",
+  description: "Returns a fixed violation for every skeleton",
+  run({ skeletons }) {
+    return skeletons.map(s => ({
+      rule: "test-rule",
+      file: s.file,
+      severity: "info",
+      message: "test violation",
+    }));
+  }
+};
+`;
+  fs2.writeFileSync(path.join(pluginsDir, "test.mjs"), pluginCode, "utf8");
+
+  const plugins = await loadPlugins(tmpDir);
+  check("loadPlugins finds 1 plugin", plugins.length === 1);
+  check("plugin id is test-plugin", plugins[0]?.id === "test-plugin");
+
+  const opts = (await import("../dist/config.js")).resolveOptions({ detail: "full", emitHtml: false });
+  const { buildSkeletonsBulk } = await import("../dist/pool.js");
+  const { collectSourceFiles } = await import("../dist/skeleton.js");
+  const files = collectSourceFiles(GRAPH_DIR, opts);
+  const items = files.map(f => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
+  const built = await buildSkeletonsBulk(items, opts);
+  const skels = built.filter(Boolean).map(r => r.skel);
+
+  const results = await runPlugins(plugins, { root: tmpDir, skeletons: skels });
+  check("runPlugins returns array", Array.isArray(results));
+  check("result has pluginId", results[0]?.pluginId === "test-plugin");
+  check("result has violations", Array.isArray(results[0]?.violations));
+  check("violations count matches skeleton count", results[0]?.violations.length === skels.length);
+
+  fs2.rmSync(tmpDir, { recursive: true, force: true });
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

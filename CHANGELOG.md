@@ -6,6 +6,35 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.35.0] — 2026-06-20 · explain, similar, incremental, coverage merge, plugins, web UI
+
+### New CLI commands
+- `ast-map explain <file> <symbol>` — structural explanation of any symbol: purpose, callers, deps, smells, change risk; `--ai` adds Claude prose explanation
+- `ast-map similar [dir]` — find structurally similar/duplicate functions via AST fingerprinting (no AI)
+- `ast-map serve [dir]` — interactive web SPA at `http://localhost:7337` — dark theme dashboard, D3 dependency graph, all analysis pages
+- `ast-map covmerge <report>` — merge structural coverage map with actual Istanbul/lcov/Clover/Cobertura report
+- `ast-map plugins [dir]` — run custom JS lint plugins from `.ast-map/plugins/`
+- `--changed-since <ref>` flag on `smells` and `security` — incremental analysis via git diff
+
+### New MCP tools (4 added)
+- `explain_symbol` — structural + optional AI explanation of any symbol
+- `find_similar` — AST fingerprint groups across a directory
+- `merge_coverage` — Istanbul/lcov/Clover/Cobertura report merged with structural map
+- `run_plugins` — load and run `.ast-map/plugins/*.mjs` custom rules
+
+### New source modules
+- `src/explain.ts` — `buildExplainResult()` + `aiExplain()` (Claude via node:https)
+- `src/similar.ts` — `findSimilar()` with 7-component structural fingerprint
+- `src/incremental.ts` — content-hash state + `filterToGitChanged()` + `detectChanges()`
+- `src/covmerge.ts` — 4-format coverage parser + `mergeCoverage()` merger
+- `src/plugins.ts` — `loadPlugins()` / `runPlugins()` / `EXAMPLE_PLUGIN` scaffold
+- `src/serve.ts` — `startServe()` HTTP server with 10 REST endpoints + 5 s cache
+- `src/webapp.ts` — self-contained SPA template (D3.js from CDN, dark theme, 8 pages)
+
+### Other changes
+- `ast-map init` now scaffolds `.ast-map/plugins/example.mjs` alongside the config
+- 296 tests (up from 242), 0 failures
+
 ## [1.34.0] — 2026-06-20 · MCP tools, AI refactor, LSP server, PR comments, ast-map init
 
 ### New MCP tools (7 added)
