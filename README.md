@@ -4,7 +4,7 @@ An **MCP server + CLI tool** that turns source code into structured, machine-rea
 
 Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex guessing — real AST parsing.
 
-**30 MCP tools / 32 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators, test-coverage mapping — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** with test-coverage, coupling and SDP cards (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), and a **CI quality gate** (`ast-map check`, baseline ratchet).
+**44 MCP tools / 49 CLI commands / 5 MCP prompts** spanning skeletons, dependency graphs, and deep analysis — dead code, cycles, change-impact, complexity, duplicates, unused params, type-flow, decorators, test-coverage mapping — plus monorepo support, an interactive **graph explorer** with a **coupling overlay** (`ast-map explore`), **watch mode**, a one-page **health dashboard** with test-coverage, coupling and SDP cards (`ast-map report`), a **persistent parse cache + parallel parsing** (warm re-scans skip parsing entirely), a **CI quality gate** (`ast-map check`, baseline ratchet), **code smell + security scanning** with AI-powered auto-patch (`ast-map patch`), **AI test generation** (`ast-map testgen --ai`), **Mermaid diagram export** (`ast-map diagram`), a **full-featured web SPA** (`ast-map serve`), **custom lint plugins** (`ast-map plugins`), and new in **v2.0.0**: persistent skeleton index, architecture import rules, TF-IDF re-ranking for semantic search, and API doc generation.
 
 **Supported languages:** TypeScript · TSX · JavaScript (ESM/CJS) · Python · Go · Rust · Java · C# · C · C++ · Kotlin · Swift · Vue · Svelte (SFC `<script>`) · **PHP** · **Ruby**
 
@@ -118,6 +118,8 @@ ast-map explore   [dir]            [-o out.html]
 ast-map watch     [dir]            [-o out.html]
 ast-map sourcemap <file>
 ast-map report    [dir]            [-o report.html]
+ast-map dashboard [dir]                          # audit KPI summary (dead/cycles/smells/risk)
+ast-map history   [dir]                          # historical health trend chart
 ast-map diff      [base]           [--dir <d>]   # git-aware changed symbols + impact
 ast-map risk      [dir]            [-n N]        # churn × complexity
 ast-map pack      <file> [symbol]  [--scan <d>] # minimal context pack
@@ -127,12 +129,27 @@ ast-map modules   [dir]                          # directory-level coupling + ed
 ast-map cache     [stats|clear]                  # persistent parse cache (.ast-map/cache)
 ast-map check     [dir]            [--update-baseline] [--min-score N] [--max-cycles N] ...
 ast-map search   <pattern> [dir]   [-m contains|exact|regex] [-k kind] [-e]
-ast-map find     <query> [dir]     [-l N] [-k kind] [-e]   # semantic: by meaning
+ast-map find     <query> [dir]     [-l N] [-k kind] [-e] [--rerank] [--api-key KEY]
 ast-map tests    [dir]             [alias: coverage] [-u] [--links] [-n N]
+ast-map testgen  <path>            [--framework vitest|jest|mocha|node|pytest|gotest] [--ai]
+ast-map smells   [path]            [--changed-since <ref>] [--json]
+ast-map security [path]            [--min-severity critical|high|medium|low] [--changed-since <ref>]
+ast-map diagram  [dir]             [--type class|deps|modules] [--max-nodes N]
+ast-map fix      [dir]             [--ai] [--min-priority 1|2|3] [--api-key KEY]
+ast-map init                       [--defaults]  # scaffold .ast-map.json + plugin example
 ast-map deps     <file>            [--scan <dir>]
 ast-map top      <dir>             [-n 10]
 ast-map impact   <file> <symbol>   [--scan <dir>]
 ast-map calls    <file> <fn>       [--scan <dir>]
+ast-map explain  <file> <symbol>   [--scan <dir>] [--ai] [--api-key KEY]
+ast-map similar  [dir]             [--kinds fn,class] [--min-group N]
+ast-map serve    [dir]             [--port N] [--watch]   # web SPA + REST + SSE
+ast-map covmerge <report>          [--format auto|istanbul|lcov|clover|cobertura]
+ast-map plugins  [dir]                           # run .ast-map/plugins/*.mjs
+ast-map index    [dir]             [--force]     # build .ast-map/index.json
+ast-map arch     [dir]                           # check architecture import rules (CI-friendly)
+ast-map patch    [dir]             [-y] [--severity error|warning] [--smells-only] [--security-only]
+ast-map doc      [dir]             [-o file] [--html] [--exported-only] [--ai] [--api-key KEY]
 ```
 
 ### Examples
@@ -588,6 +605,166 @@ Return the N most-imported symbols — your codebase's "God Nodes" where a break
 
 ---
 
+### `detect_code_smells`
+Scan a file or directory for structural code smells: god classes (too many public methods/fields), long methods, long parameter lists, primitive obsession, and shallow wrappers. Returns per-file smell lists with file, line, symbol, severity, and message.
+
+```json
+{ "path": "src/", "scanned": 42, "total": 7, "smells": [
+  { "file": "src/auth.ts", "kind": "long-method", "symbol": "validate",
+    "line": 8, "severity": "warning", "message": "Method exceeds 60 lines (82)" }
+]}
+```
+
+**Params:** `path`, `max_methods` (default 10), `max_fields` (default 8), `max_method_lines` (default 60), `max_params` (default 4)
+
+---
+
+### `scan_security`
+Static security scan across 12 rules: `eval`, `innerHTML`, `dangerouslySetInnerHTML`, `child_process`, shell-exec, weak-crypto, hardcoded-secret, sql-injection, http-url, no-rate-limit, prototype-pollution. Returns issues with file, rule, severity, line, and snippet.
+
+```json
+{ "path": "src/", "scanned": 42, "total": 2, "issues": [
+  { "file": "src/db.ts", "rule": "sql-injection", "severity": "critical",
+    "line": 14, "snippet": "db.query(`SELECT * FROM users WHERE id = ${id}`)" }
+]}
+```
+
+**Params:** `path`, `min_severity` (`"critical"` | `"high"` | `"medium"` | `"low"`)
+
+---
+
+### `generate_diagram`
+Generate a Mermaid diagram of the codebase.
+- `type=class` — `classDiagram` of classes, interfaces, enums and their relationships
+- `type=deps` — file dependency graph (`graph TD`)
+- `type=modules` — collapsed module-level graph (`graph LR`)
+
+Returns a `mermaid` string you can paste into any Mermaid renderer or GitHub markdown.
+
+**Params:** `path`, `type` (`"class"` | `"deps"` | `"modules"`), `max_nodes` (default 50)
+
+---
+
+### `get_fix_suggestions`
+Return actionable, prioritized fix suggestions derived from dead exports, code smells, and security issues. Each suggestion carries a kind, file, line, description, before/after snippet, and priority (1 = must fix, 2 = should fix, 3 = nice to have).
+
+```json
+{ "path": "src/", "scanned": 42, "total": 5, "suggestions": [
+  { "kind": "security", "priority": 1, "file": "src/db.ts", "line": 14,
+    "description": "SQL injection via template literal",
+    "before": "db.query(`SELECT * WHERE id=${id}`)",
+    "after": "db.query('SELECT * WHERE id=?', [id])" }
+]}
+```
+
+**Params:** `path`, `min_priority` (1–3, default 3 = all)
+
+---
+
+### `generate_tests`
+Generate test stubs for a source file using its AST skeleton. Supports vitest, jest, mocha, node:test, pytest, and gotest. Returns the generated test file content plus metadata: `testCount`, `framework`, `testFilePath`.
+
+**Params:** `path`, `framework` (`"vitest"` | `"jest"` | `"mocha"` | `"node"` | `"pytest"` | `"gotest"`), `exported_only` (default `true`)
+
+---
+
+### `generate_tests_ai`
+Same as `generate_tests` but enhances stubs with real assertions via Claude — no more TODO placeholders. Falls back gracefully to stubs when the API key is absent. Requires `ANTHROPIC_API_KEY` or explicit `api_key`.
+
+**Params:** `path`, `framework`, `api_key`, `model`
+
+---
+
+### `ai_refactor`
+Send the smells or security issues found in a file to Claude and receive concrete refactored code. Returns `before`/`after` code blocks plus an explanation for each issue. Requires `ANTHROPIC_API_KEY` or explicit `api_key`.
+
+```json
+{ "path": "src/auth.ts", "total": 2, "results": [
+  { "kind": "smell", "before": "function auth(u,p,t,r,o,c) {...}",
+    "after": "function auth({ user, pass, token }: AuthParams) {...}",
+    "explanation": "Replaced long parameter list with a typed options object." }
+]}
+```
+
+**Params:** `path`, `kind` (`"smell"` | `"security"` | `"both"`), `api_key`, `model`, `limit` (default 3)
+
+---
+
+### `explain_symbol`
+Structural explanation of any named symbol: what it does, who calls it, what it depends on, detected smells, cyclomatic complexity rating, and estimated change risk. With `ai: true`, Claude writes a prose explanation using the structural data.
+
+```json
+{ "symbol": "validateSession", "file": "src/auth.ts",
+  "calledBy": [{ "file": "src/middleware.ts" }],
+  "calls": [{ "callee": "prisma.session.findUnique" }],
+  "smells": [], "complexity": "low", "changeRisk": "medium",
+  "explanation": "Validates an incoming JWT, looks up the session …" }
+```
+
+**Params:** `path`, `symbol`, `scanDir`, `ai` (default `false`), `api_key`, `model`
+
+---
+
+### `find_similar`
+Find groups of functions, methods, or classes that share the same structural fingerprint (param count, async, return type, size, nesting) across a directory — duplication and consolidation candidates, no AI or text comparison needed.
+
+```json
+{ "directory": "src/", "groupCount": 3, "groups": [
+  { "fingerprint": "fn|2|async|void|small", "size": 3,
+    "members": [
+      { "file": "src/a.ts", "name": "fetchUser" },
+      { "file": "src/b.ts", "name": "fetchPost" }
+    ]}
+]}
+```
+
+**Params:** `path`, `kinds` (default `["function","method","class"]`), `min_group_size` (default 2)
+
+---
+
+### `merge_coverage`
+Enrich the structural test coverage map with actual line/branch percentages from a real coverage report. Supports Istanbul JSON, lcov, Clover XML, and Cobertura XML. Returns enriched per-file coverage, dead tests (tested but 0% actual coverage), and uncovered files.
+
+**Params:** `report` (path to coverage file), `path` (project dir), `format` (`"auto"` | `"istanbul"` | `"lcov"` | `"clover"` | `"cobertura"`)
+
+---
+
+### `run_plugins`
+Load and run all `.mjs`/`.js` plugins from `<root>/.ast-map/plugins/` against the current skeletons. Each plugin exports an `AstMapPlugin` with an `id` and a `run(ctx)` function that returns violations. Returns per-plugin violation lists with file, line, symbol, severity, and message.
+
+**Params:** `path` (optional, defaults to root)
+
+---
+
+### `build_index`
+Build or refresh the persistent skeleton index at `.ast-map/index.json`. Subsequent CLI commands and the `check_arch_rules` tool read from this index (SHA-1 hash verified) for 10–100× faster analysis on warm runs.
+
+**Params:** `dir` (optional), `force` (ignore cached hashes and rebuild all)
+
+---
+
+### `check_arch_rules`
+Enforce forbidden/required import rules declared in `.ast-map.json` under `arch.rules`. Returns structured violations with file, rule name, and severity (`error` | `warning`). Uses the persistent index when available.
+
+```json
+{ "ruleCount": 2, "violationCount": 1, "violations": [
+  { "rule": "no-ui-in-domain", "severity": "error",
+    "from": "src/domain/order.ts", "to": "src/ui/Button.tsx",
+    "message": "Domain layer must not import UI layer" }
+]}
+```
+
+**Params:** `dir` (optional)
+
+---
+
+### `generate_docs`
+Generate Markdown or HTML API documentation from the skeleton of a directory. Optionally enhance symbol descriptions with Claude (`ai: true`). When `exportedOnly` is `true` (default), only exported symbols are included.
+
+**Params:** `dir` (optional), `format` (`"markdown"` | `"html"`), `exportedOnly` (default `true`), `ai` (default `false`), `apiKey`
+
+---
+
 ## Project Config — `.ast-map.config.json`
 
 Place in your project root. All fields optional.
@@ -607,12 +784,30 @@ Place in your project root. All fields optional.
     "maxCycles": 0,
     "maxSdpViolations": 10,
     "minScore": 70
+  },
+  "arch": {
+    "rules": [
+      {
+        "name": "no-ui-in-domain",
+        "from": "src/domain/**",
+        "forbidImport": "src/ui/**",
+        "severity": "error",
+        "message": "Domain layer must not import UI layer"
+      },
+      {
+        "name": "services-must-use-repo",
+        "from": "src/services/**",
+        "requireImport": "src/repositories/**",
+        "severity": "warning"
+      }
+    ]
   }
 }
 ```
 
 - `cache` — persistent parse cache in `<root>/.ast-map/cache` (default `true`; also disabled by `AST_MAP_NO_CACHE=1`). Inspect/clear with `ast-map cache [stats|clear]`.
 - `check` — default thresholds for `ast-map check` / `check_quality_gate`; CLI flags override per run.
+- `arch.rules` — declarative import rules enforced by `ast-map arch` / `check_arch_rules`. Each rule has a `from` glob, a `forbidImport` or `requireImport` glob, optional `name`, `severity` (`"error"` | `"warning"`), and `message`. `ast-map arch` exits non-zero on errors (CI-friendly). Globs support `**` (any depth), `*` (single segment), and `?` (single char).
 
 The config is read live — changes take effect on the next call without restarting the MCP server.
 
@@ -726,30 +921,80 @@ interface SkeletonFile {
 
 ```
 src/
-├── index.ts            — MCP server + all 14 tool registrations
-├── cli.ts              — ast-map CLI (13 commands)
+├── index.ts            — MCP server + 44 tool registrations
+├── cli.ts              — ast-map CLI (49 commands)
+├── lsp.ts              — JSON-RPC 2.0 LSP server (diagnostics + code lens)
 ├── types.ts            — SkeletonFile, SymbolNode, ImportRef
-├── config.ts           — SkeletonOptions, resolveOptions(), loadProjectConfig()
+├── config.ts           — SkeletonOptions, resolveOptions(), loadProjectConfig() + arch rules type
 ├── registry.ts         — language detection + extractor registry
 ├── parser.ts           — tree-sitter WASM loader + AST node helpers
 ├── skeleton.ts         — buildSkeleton(), collectSourceFiles() + parse cache
 ├── resolver.ts         — resolveImportPath(), resolveFileImports() (TS/JS/Python relative)
-├── crosslang.ts        — Java FQCN / C# namespace / Rust crate / Go module resolvers + index cache
+├── tsconfig.ts         — TS/JS path-alias resolution via tsconfig.json / jsconfig.json
+├── crosslang.ts        — Java FQCN / C# namespace / Rust crate / Go module resolvers
+├── roots.ts            — multi-root + unlocked-mode boundary resolution
 ├── graph.ts            — buildSymbolGraph() (language-aware second pass)
-├── graph-analysis.ts   — findDeadExports(), findCircularDeps(), getChangeImpact(),
-│                         getFileDeps(), getTopSymbols()
+├── graph-analysis.ts   — findDeadExports(), findCircularDeps(), getChangeImpact(), getTopSymbols()
 ├── callgraph.ts        — buildCallGraph() — AST-level call extraction
 ├── analysis.ts         — findSymbol(), validate helpers, checkGeneralRules()
 ├── html.ts             — renderHtml(), renderCombinedHtml()
 ├── search.ts           — searchSymbols()
+├── semantic.ts         — semanticSearch(), identifier tokenization, programming thesaurus
+├── diskcache.ts        — persistent parse cache (SHA-1 keyed, .ast-map/cache)
+├── pool.ts             — worker-thread parallel parsing pool
+├── worker.ts           — per-worker parse + skeleton build
+├── coupling.ts         — computeCoupling() (Ca / Ce / instability)
+├── layers.ts           — findLayerViolations() (SDP)
+├── modulecoupling.ts   — computeModuleCoupling() (directory-level)
+├── gitdiff.ts          — getChangedFiles(), computeRisk()
+├── contextpack.ts      — packContext() — minimal context for a symbol
+├── sourcemap.ts        — readSourceMap() — inline + external source map parsing
+├── workspace.ts        — analyzeWorkspace() — monorepo package discovery
+├── typeflow.ts         — traceType() — type-flow tracing across a directory
+├── complexity.ts       — computeFileComplexity() — cyclomatic complexity
+├── unused-params.ts    — findUnusedParams() — unused function parameters
+├── graph-analysis.ts   — findDuplicateSymbols(), getFileDeps()
+├── testmap.ts          — mapTestCoverage() — structural test coverage
+├── check.ts            — runQualityGate() — baseline ratchet + absolute thresholds
+├── report.ts           — generateReport() — premium HTML health dashboard
+├── dashboard.ts        — buildDashboard() — audit KPI summary
+├── history.ts          — buildHistory() — historical health trend
+├── explorer.ts         — renderExplorer() — force-directed file graph HTML
+├── sfc.ts              — Vue / Svelte SFC <script> block extraction
+├── smells.ts           — detectSmells() — 6 structural smell patterns
+├── security.ts         — scanFileForSecurityIssues() — 12 static security rules
+├── diagram.ts          — buildClassDiagram(), buildDepsDiagram(), buildModulesDiagram()
+├── fix.ts              — buildFixSuggestions() — prioritised fix list
+├── testgen.ts          — generateTestFile() — test stubs (6 frameworks)
+├── ai-testgen.ts       — tryAiEnhanceTests() — Claude-enhanced test assertions
+├── ai-refactor.ts      — callClaude(), aiRefactorBatch() — AI refactoring
+├── explain.ts          — buildExplainResult(), aiExplain() — symbol explanation
+├── similar.ts          — findSimilar() — structural fingerprint groups
+├── incremental.ts      — content-hash state, filterToGitChanged(), detectChanges()
+├── covmerge.ts         — mergeCoverage() — 4-format coverage parser + structural merge
+├── plugins.ts          — loadPlugins(), runPlugins() — custom lint plugin runner
+├── serve.ts            — startServe() — HTTP server + REST endpoints + SSE /events
+├── webapp.ts           — self-contained SPA template (D3.js, dark theme, 8 pages)
+├── indexstore.ts       — buildIndex(), loadIndex(), isIndexFresh(), getSkeletons()
+├── arch-rules.ts       — checkArchRules(), loadArchRules(), globToRegex()
+├── patch.ts            — generatePatch(), interactivePatch(), colored unified diff
+├── docgen.ts           — buildDocOutput(), renderMarkdown(), renderDocHtml(), aiEnhanceDocs()
+├── embeddings.ts       — buildTfIdfVectors(), cosineSearch(), rerankWithClaude()
+├── prompts.ts          — 5 MCP prompt definitions
 └── extractors/
     ├── common.ts       — makeSymbol(), toOutline()
-    ├── typescript.ts   — TS/JS/TSX: symbols + imports + re-exports
-    ├── python.ts       — Python: symbols + relative import resolution
+    ├── typescript.ts   — TS/JS/TSX: symbols + imports + re-exports + decorators
+    ├── python.ts       — Python: symbols + relative import resolution + decorators
     ├── go.ts           — Go: symbols + imports
     ├── rust.ts         — Rust: struct/trait/enum/impl + `use` imports
-    ├── java.ts         — Java: class/interface/enum/method/field + package + imports
-    └── csharp.ts       — C#: namespace recursion + class/struct/interface/property + `using`
+    ├── java.ts         — Java: class/interface/enum/method/field + FQCN
+    ├── csharp.ts       — C#: namespace recursion + class/struct/interface + `using`
+    ├── kotlin.ts       — Kotlin: FQCN / package index
+    ├── swift.ts        — Swift: module = directory under Sources/
+    ├── c.ts            — C: functions + `#include` with header↔impl pairing
+    ├── cpp.ts          — C++: classes + `#include`
+    ├── php.ts          — PHP: classes/interfaces/traits/enums + `use` + require/include
+    └── ruby.ts         — Ruby: classes/modules/methods + require/require_relative
 ```
 
 ---
@@ -835,6 +1080,10 @@ Not part of the public API: the internal `src/` module layout and the generated 
 
 | Version | What changed |
 |---------|--------------|
+| **2.0.0** | **6 major features** — **Persistent skeleton index** (`ast-map index`, `build_index`): `.ast-map/index.json` hash-based incremental rebuild, 10–100× warm speed; **SSE live reload** (`ast-map serve --watch`, `/events` endpoint): EventSource client auto-refreshes the web SPA on file changes; **TF-IDF re-ranking** (`ast-map find --rerank`): cosine similarity pre-rank + optional Claude API re-ranking; **Auto-patch** (`ast-map patch`, `generatePatch`): colored unified diff with Claude-generated before/after, readline y/N prompt per issue; **Architecture rules** (`ast-map arch`, `check_arch_rules`): forbidden/required import rules in `.ast-map.json` `arch.rules`, glob patterns, CI exit code; **Doc generation** (`ast-map doc`, `generate_docs`): Markdown + HTML API reference, `--ai` flag for Claude descriptions. **44 MCP tools / 49 CLI commands.** |
+| **1.35.0** | **Web SPA + symbol explanation + similar + coverage merge + plugins** — new `ast-map serve [dir]` launches a dark-theme web app at `:7337` (D3 dependency graph, all analysis pages, 10 REST endpoints); new `ast-map explain <file> <symbol>` structural explanation with optional `--ai` prose (callers, deps, smells, complexity, risk); new `ast-map similar [dir]` AST fingerprint groups (7-component, no AI); new `ast-map covmerge <report>` merges Istanbul/lcov/Clover/Cobertura with the structural map; new `ast-map plugins [dir]` runs custom `.mjs` lint plugins from `.ast-map/plugins/`. New MCP tools: `explain_symbol`, `find_similar`, `merge_coverage`, `run_plugins`. **41 MCP tools / 45 CLI commands.** |
+| **1.34.0** | **Code intelligence suite + AI refactor + LSP + init** — 7 new MCP tools: `detect_code_smells` (6 patterns), `scan_security` (12 rules), `generate_diagram` (Mermaid class/deps/modules), `get_fix_suggestions` (P1–P3 prioritized), `generate_tests` (6 frameworks), `generate_tests_ai` (Claude-enhanced assertions), `ai_refactor` (before/after patches from Claude). Full **JSON-RPC 2.0 LSP server** (`ast-map-lsp`): dead-export warnings, security-issue errors, complexity code lenses. `ast-map init` scaffolds `.ast-map.json` + plugin example. **37 MCP tools / 41 CLI commands.** |
+| **1.33.0** | **AI test generation + VS Code extension** — `ast-map testgen --ai` sends source + stubs to Claude and returns tests with real assertions (graceful fallback to stubs). New VS Code extension: complexity code lens, dead-export diagnostics, security diagnostics, Issues Tree View, commands (Generate Tests, Scan Security, Show Diagram, Open Report), status-bar health score. |
 | **1.28.0** | **Test coverage in the dashboard** — `ast-map report` / `get_codebase_report` gain a **Test coverage** card (coverage bar + untested sources ranked by risk with Ca/symbols) and stat tile; structural coverage now factors into the health score (capped penalty). Reporting on `src/` only? Test files are **pulled in from the project root automatically**. |
 | **1.27.0** | **Test-coverage mapping** — new MCP tool `get_test_coverage` + CLI `ast-map tests` (alias `coverage`): pairs test files with the sources they exercise (import edges + naming conventions) and lists **untested sources ranked by risk** (fan-in, then symbols). Fixture dirs excluded; orphan tests reported. File-level, zero instrumentation. (**30 tools / 32 commands**) |
 | **1.26.0** | **Coupling overlay in the explorer** — `ast-map explore` gains a `color: coupling` mode: nodes shaded by **instability** I = Ce/(Ca+Ce) on a green (stable) → red (volatile) scale, with a legend, and Ca / Ce / I readouts in the hover tooltip and detail sidebar. Spot load-bearing files and volatile hotspots at a glance. |
