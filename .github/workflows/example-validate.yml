@@ -1,4 +1,4 @@
-# Example: use the AST-MCP Validate action as an architecture gate in your own repo.
+# Architecture gate: builds from source and validates the src/ directory.
 name: Architecture
 on: [pull_request]
 jobs:
@@ -9,7 +9,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - uses: 6ixthxense/AST-MCP@v1.0.0
-        with:
-          path: src
-          max-lines: "400"
+      - run: npm ci || npm install
+      - run: npm run build
+      - run: node dist/cli.js validate src --max-lines 400 --max-imports 20 --max-exports 15
