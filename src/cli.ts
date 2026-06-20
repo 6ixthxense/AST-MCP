@@ -20,6 +20,8 @@ import { discoverWorkspace, findPackageCycles } from "./workspace.js";
 import { buildExplorerHtml } from "./explorer.js";
 import { readSourceMap } from "./sourcemap.js";
 import { buildReport, buildReportHtml } from "./report.js";
+import { appendHistory, loadHistory } from "./history.js";
+import { buildDashboardHtml } from "./dashboard.js";
 import { runQualityGate, BASELINE_FILENAME, type CheckThresholds } from "./check.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
@@ -450,11 +452,40 @@ program
 
 program
   .command("watch [dir]")
-  .description("Rebuild analysis (and optionally the explorer) when files change")
+  .description("Rebuild analysis when files change; optionally serve a live-reload dashboard")
   .option("-o, --out <file>", "Also regenerate the explorer HTML on each change")
-  .action(async (dir: string | undefined, opts: { out?: string }) => {
+  .option("-p, --port <n>", "Serve live dashboard on this port (enables SSE live-reload)", (v) => parseInt(v, 10))
+  .option("--title <title>", "Dashboard title (used with --port)")
+  .action(async (dir: string | undefined, opts: { out?: string; port?: number; title?: string }) => {
     const { abs, rel } = resolveArg(dir ?? ".");
     if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    // SSE clients registry (only used when --port is given)
+    const sseClients: Set<import("node:http").ServerResponse> = new Set();
+
+    function broadcast() {
+      for (const res of sseClients) {
+        try { res.write("event: reload\ndata: reload\n\n"); } catch { sseClients.delete(res); }
+      }
+    }
+
+    // Current dashboard HTML (updated on each rebuild when --port given)
+    let dashboardHtml = "";
+
+    async function buildDash(skels: SkeletonFile[], graph: ReturnType<typeof buildSymbolGraph>) {
+      const data = await buildReport(abs, ROOT);
+      const history = appendHistory(ROOT, data);
+      const title = opts.title ?? rel + "/";
+      dashboardHtml = buildDashboardHtml(
+        buildReportHtml(data, history),
+        renderCombinedHtml(skels),
+        buildExplorerHtml(graph, abs),
+        skels,
+        title,
+        opts.port,
+      );
+      return data;
+    }
 
     let building = false;
     let queued = false;
@@ -471,12 +502,43 @@ program
           fs.writeFileSync(path.resolve(process.cwd(), opts.out), buildExplorerHtml(graph, abs), "utf8");
           line += ` · ${green("explorer updated")}`;
         }
+        if (opts.port) {
+          await buildDash(skels, graph);
+          broadcast();
+          line += ` · ${green("dashboard rebuilt")}`;
+        }
         line += `  ${dim(reason)}`;
         console.log(line);
       } finally {
         building = false;
         if (queued) { queued = false; rebuild("(coalesced)"); }
       }
+    }
+
+    // Start HTTP server when --port is given
+    if (opts.port) {
+      const http = await import("node:http");
+      const server = http.createServer((req, res) => {
+        const url = req.url ?? "/";
+        if (url === "/events") {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+          });
+          res.write(":ok\n\n");
+          sseClients.add(res);
+          req.on("close", () => sseClients.delete(res));
+        } else {
+          const body = dashboardHtml || "<html><body>Building…</body></html>";
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(body);
+        }
+      });
+      server.listen(opts.port, () => {
+        console.log(green("✓") + ` Dashboard served at ${cyan(`http://localhost:${opts.port}`)}  (SSE live-reload active)`);
+      });
     }
 
     header(`Watching ${rel}/  ${dim("(Ctrl+C to stop)")}`);
@@ -681,13 +743,87 @@ program
     if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
     const data = await buildReport(abs, ROOT);
     if (opts.json) return jsonOut(data);
+    const history = appendHistory(ROOT, data);
     const out = path.resolve(process.cwd(), opts.out);
     fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, buildReportHtml(data), "utf8");
+    fs.writeFileSync(out, buildReportHtml(data, history), "utf8");
     header(`Code Health \u2014 ${rel}/  ${dim(`(${data.fileCount} files)`)}`);
     const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
     console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max} · tests ${Math.round(data.testCoverage.coverageRatio * 100)}%`));
     console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
+    console.log();
+  });
+
+// ─── Command: dashboard ───────────────────────────────────────────────────────
+
+program
+  .command("dashboard [dir]")
+  .description("Generate a unified HTML dashboard (report + skeleton + explorer + symbol table)")
+  .option("-o, --out <file>", "Output HTML path", "ast-dashboard.html")
+  .option("--title <title>", "Dashboard title")
+  .action(async (dir: string | undefined, opts: { out: string; title?: string }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    console.log(dim("Building analysis…"));
+    const skeletons = await gatherSkeletons(abs, "outline");
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const explorerHtml = buildExplorerHtml(graph, abs);
+    const skeletonHtml = renderCombinedHtml(skeletons);
+    const data = await buildReport(abs, ROOT);
+    const history = appendHistory(ROOT, data);
+    const reportHtml = buildReportHtml(data, history);
+
+    const title = opts.title ?? rel + "/";
+    const html = buildDashboardHtml(reportHtml, skeletonHtml, explorerHtml, skeletons, title);
+
+    const out = path.resolve(process.cwd(), opts.out);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, html, "utf8");
+
+    header(`Dashboard — ${rel}/  ${dim(`(${skeletons.length} files)`)}`);
+    const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
+    console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles`));
+    console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
+    console.log(indent(dim("open in a browser — Overview · Files · Dependencies · Symbols tabs")));
+    console.log();
+  });
+
+// ─── Command: history ─────────────────────────────────────────────────────────
+
+program
+  .command("history [dir]")
+  .description("Show historical score trend from .ast-map/history.json")
+  .option("--json", "Output as JSON")
+  .option("-n, --limit <n>", "Max entries to show", (v) => parseInt(v, 10), 30)
+  .action((dir: string | undefined, opts: { json?: boolean; limit: number }) => {
+    const { rel } = resolveArg(dir ?? ".");
+    const history = loadHistory(ROOT);
+
+    if (opts.json) return jsonOut({ directory: rel, entryCount: history.length, history });
+
+    const entries = history.slice(-opts.limit);
+    header(`Score History — ${rel}/  ${dim(`(${entries.length} entries)`)}`);
+
+    if (entries.length === 0) {
+      console.log(indent(dim("No history yet. Run `ast-map report` to start tracking.")));
+    } else {
+      const maxScore = 100;
+      const barW = 20;
+      for (const e of entries) {
+        const bar = "█".repeat(Math.round((e.score / maxScore) * barW)).padEnd(barW, "░");
+        const gcolor = e.grade === "A" || e.grade === "B" ? green : e.grade === "C" || e.grade === "D" ? yellow : red;
+        const dateStr = e.date.slice(0, 10);
+        console.log(indent(`${dim(dateStr)}  ${gcolor(bar)}  ${bold(String(e.score))} ${dim(`(${e.grade})`)}  ${dim(`${e.dead}d · ${e.cycles}c · cx${e.maxComplexity}`)}`));
+      }
+      const first = entries[0];
+      const last = entries[entries.length - 1];
+      if (entries.length > 1) {
+        const delta = last.score - first.score;
+        const arrow = delta > 0 ? green(`↑ +${delta}`) : delta < 0 ? red(`↓ ${delta}`) : dim("→ 0");
+        console.log(`\n  ${dim(`Trend over ${entries.length} entries:`)} ${bold(arrow)}`);
+      }
+    }
     console.log();
   });
 
@@ -1340,6 +1476,9 @@ ${bold("Examples:")}
   ast-map top src/ -n 15
   ast-map impact src/utils.ts sanitize --scan src/
   ast-map calls src/utils.ts buildCallGraph --scan src/
+  ast-map dashboard src/ -o dash.html
+  ast-map history
+  ast-map watch src/ --port 4321
 
 ${bold("Root:")}
   Defaults to cwd. Override with AST_MAP_ROOT=<path> or run from your project root.

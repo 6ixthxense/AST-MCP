@@ -9,6 +9,7 @@ import { findLayerViolations, type LayerViolation } from "./layers.js";
 import { computeModuleCoupling, type ModuleMetric } from "./modulecoupling.js";
 import type { SkeletonFile } from "./types.js";
 import { mapTestCoverage, isTestFile, isFixtureFile, type UntestedSource } from "./testmap.js";
+import type { HistoryEntry } from "./history.js";
 
 export interface ReportData {
   project: string;
@@ -214,8 +215,14 @@ function collapsibleCard(id: string, title: string, content: string, icon: strin
   </div>`;
 }
 
-export function buildReportHtml(d: ReportData): string {
+export function buildReportHtml(d: ReportData, history: HistoryEntry[] = []): string {
   const gc = GRADE_COLOR[d.grade] ?? "#888";
+  const prev = history.length >= 2 ? history[history.length - 2] : null;
+  const scoreDelta = prev ? d.score - prev.score : null;
+  const deltaBadge = scoreDelta === null ? ""
+    : scoreDelta > 0 ? `<span class="delta up">↑ +${scoreDelta}</span>`
+    : scoreDelta < 0 ? `<span class="delta dn">↓ ${scoreDelta}</span>`
+    : `<span class="delta neu">→ 0</span>`;
   const maxLang = d.languages[0]?.files ?? 1;
   const langs = d.languages.map((l) => bar(l.lang, l.files, maxLang, "#534ab7", `${l.files}`)).join("");
   const maxCx = d.complexity.hotspots[0]?.complexity ?? 1;
@@ -404,6 +411,13 @@ body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"S
 .cycle-arrow{color:#e24b4a;font-size:16px;flex-shrink:0;line-height:1.4;}
 .cycle-chain{font-size:11px;word-break:break-all;flex:1;}
 
+.delta{font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;margin-left:8px;}
+.delta.up{background:#dcfce7;color:#16a34a;}.delta.dn{background:#fee2e2;color:#dc2626;}.delta.neu{background:var(--soft);color:var(--dim);}
+@media(prefers-color-scheme:dark){.delta.up{background:#14532d;color:#4ade80;}.delta.dn{background:#7f1d1d;color:#f87171;}}
+.sparkline{display:flex;align-items:flex-end;gap:2px;height:28px;margin-top:8px;}
+.spark-bar{width:8px;border-radius:2px 2px 0 0;min-height:2px;transition:opacity .2s;}
+.spark-bar:hover{opacity:.75;}
+
 /* ── Footer ── */
 .foot{color:var(--dim);font-size:11px;text-align:center;margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);}
 .foot a{color:var(--dim);}
@@ -422,8 +436,17 @@ body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"S
   ${scoreRing(d.score, d.grade)}
   <div class="hero-right">
     <h1 class="h1">${esc(d.project)}</h1>
-    <div class="sub">${d.fileCount} files · ${d.symbolCount} symbols · ${d.languages.length} language(s) · generated ${esc(d.generatedAt.slice(0, 10))}</div>
+    <div class="sub">${d.fileCount} files · ${d.symbolCount} symbols · ${d.languages.length} language(s) · generated ${esc(d.generatedAt.slice(0, 10))}${deltaBadge}</div>
     ${issues ? `<div class="issues">${issues}</div>` : `<div class="issues"><div class="issue-row issue-info">✅ No critical issues detected</div></div>`}
+    ${history.length > 1 ? (() => {
+     const max = Math.max(...history.map(h => h.score), 1);
+     const bars = history.map(h => {
+       const pct = Math.round((h.score / max) * 100);
+       const gc2 = GRADE_COLOR[h.grade] ?? "#888";
+       return `<div class="spark-bar" style="height:${pct}%;background:${gc2}" title="${h.date.slice(0,10)}: ${h.score}/100 (${h.grade})"></div>`;
+     }).join("");
+     return `<div class="sparkline" title="Score history (last ${history.length} runs)">${bars}</div>`;
+   })() : ""}
   </div>
 </div>
 
