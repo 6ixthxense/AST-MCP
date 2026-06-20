@@ -932,6 +932,49 @@ console.log("\n=== Symbol Search ===");
   check("aiEnhanceTests is a function", typeof aiEnhanceTests === "function");
 }
 
+// ─── AI Refactor (unit, no API call) ─────────────────────────────────────────
+{
+  console.log("\n=== AI Refactor (module shape) ===");
+  const { aiRefactor, aiRefactorBatch, readSource } = await import("../dist/ai-refactor.js");
+
+  check("aiRefactor is a function", typeof aiRefactor === "function");
+  check("aiRefactorBatch is a function", typeof aiRefactorBatch === "function");
+  check("readSource is a function", typeof readSource === "function");
+
+  // readSource returns empty string for nonexistent file
+  check("readSource returns '' for missing file", readSource("/nonexistent/file.ts") === "");
+
+  // readSource reads an actual file
+  const pkgContent = readSource(path.join(ROOT, "package.json"));
+  check("readSource reads real file", pkgContent.includes("universal-ast-mapper"));
+
+  // aiRefactorBatch with no API key should return results with error
+  const env = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+
+  const fakeSmell = {
+    file: "src/utils.ts", smell: "god-class", symbol: "GodClass",
+    severity: "warning", message: "GodClass has 15 methods", line: 1,
+  };
+  const batchResult = await aiRefactorBatch(
+    [{ kind: "smell", smell: fakeSmell, sourceCode: "class GodClass {}", filePath: "src/utils.ts", language: "typescript" }],
+    {},
+  );
+  check("batch returns array", Array.isArray(batchResult));
+  check("batch result has error field when no key", typeof batchResult[0]?.error === "string");
+  check("batch result has filePath", batchResult[0]?.filePath === "src/utils.ts");
+  check("batch result has issue field", typeof batchResult[0]?.issue === "string");
+
+  if (env !== undefined) process.env.ANTHROPIC_API_KEY = env;
+}
+
+// ─── LSP module shape ─────────────────────────────────────────────────────────
+{
+  console.log("\n=== LSP server (module exists) ===");
+  // Just verify the LSP module compiles — it's a script, not a library
+  check("dist/lsp.js exists", (await import("node:fs")).existsSync(path.join(ROOT, "dist/lsp.js")));
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"─".repeat(40)}`);

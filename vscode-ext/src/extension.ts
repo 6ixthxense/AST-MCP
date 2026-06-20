@@ -10,6 +10,7 @@ import {
   refreshWorkspaceDiagnostics,
 } from "./diagnostics.js";
 import { IssuesViewProvider } from "./issues-view.js";
+import { startLspClient, stopLspClient } from "./lsp-client.js";
 
 // ─── Language selector ────────────────────────────────────────────────────────
 
@@ -243,6 +244,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // Start LSP client (provides always-on diagnostics + code lenses via ast-map-lsp)
+  try {
+    startLspClient(context);
+  } catch {
+    // LSP unavailable — fall back to on-save polling diagnostics below
+  }
+
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand("astMap.generateTests", () => cmdGenerateTests(false)),
@@ -298,8 +306,9 @@ function isSupportedDoc(doc: vscode.TextDocument): boolean {
   return SUPPORTED_LANGS.some((f) => f.language === doc.languageId) && doc.uri.scheme === "file";
 }
 
-export function deactivate(): void {
+export function deactivate(): Promise<void> {
   statusBarItem?.dispose();
   COLLECTION_DEAD.dispose();
   COLLECTION_SECURITY.dispose();
+  return stopLspClient();
 }

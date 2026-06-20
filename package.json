@@ -1,12 +1,13 @@
 {
   "name": "universal-ast-mapper",
-  "version": "1.33.0",
+  "version": "1.34.0",
   "description": "MCP server that maps source files into a normalized code skeleton (JSON + HTML) using tree-sitter.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "universal-ast-mapper": "dist/index.js",
-    "ast-map": "dist/cli.js"
+    "ast-map": "dist/cli.js",
+    "ast-map-lsp": "dist/lsp.js"
   },
   "files": [
     "dist",

@@ -6,6 +6,42 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [1.34.0] — 2026-06-20 · MCP tools, AI refactor, LSP server, PR comments, ast-map init
+
+### New MCP tools (7 added)
+- `detect_code_smells` — scan file/dir for 6 smell patterns; returns structured list
+- `scan_security` — static scan with 12 rules; filterable by `min_severity`
+- `generate_diagram` — Mermaid class/deps/modules diagram from any directory
+- `get_fix_suggestions` — prioritised fix suggestions (P1–P3) from dead exports + smells + security
+- `generate_tests` — test stubs for a single file (all 6 frameworks)
+- `generate_tests_ai` — AI-enhanced tests via Claude API; falls back to stubs gracefully
+- `ai_refactor` — sends smells/security to Claude; returns before/after code + explanation
+
+### AI refactor (`src/ai-refactor.ts`)
+- `ast-map fix --ai` — sends detected issues to Claude and returns concrete refactored code
+- Structured `<before>/<after>/<explanation>` XML response format
+- `aiRefactorBatch()` runs one API call per issue; failures degrade gracefully with `error` field
+- `--limit <n>` caps API calls per run (default 3)
+
+### LSP server (`src/lsp.ts`, binary `ast-map-lsp`)
+- Full JSON-RPC 2.0 over stdio — no external LSP library, zero new npm deps
+- `textDocument/publishDiagnostics` — dead exports (Warning), security issues (Error/Warning), smells (Warning/Information)
+- `textDocument/codeLens` — cyclomatic complexity above every function/class (🔴 ≥20, 🟡 ≥10)
+- VS Code extension updated to start LSP client (`vscode-languageclient`) on activation, falling back to on-save polling
+
+### GitHub Actions PR comment (`action.yml`)
+- New `mode: pr-comment` — posts/updates a health score comment on every PR
+- Shows: score with delta (↑/↓/→), grade, files/symbols/dead/cycles/complexity/coverage table
+- `github-token` input; automatically updates existing comment rather than posting duplicates
+
+### `ast-map init` (new CLI command)
+- Interactive wizard (readline) or `--defaults` for non-interactive
+- Writes `.ast-map.json` with thresholds, smell limits, security min-severity, ignore patterns
+- `--json` flag emits defaults without writing any file
+
+### Tests
+- `test/analysis.mjs` — +10 checks (AI refactor + LSP file existence); 242 total, 0 failed
+
 ## [1.33.0] — 2026-06-20 · AI testgen + VS Code extension
 
 ### AI-powered test generation (`src/ai-testgen.ts`)

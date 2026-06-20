@@ -29,6 +29,7 @@ import { detectSmells, type SmellOptions } from "./smells.js";
 import { scanFileForSecurityIssues, SECURITY_RULES } from "./security.js";
 import { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } from "./diagram.js";
 import { buildFixSuggestions } from "./fix.js";
+import { aiRefactorBatch, readSource } from "./ai-refactor.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
 import { computeCoupling } from "./coupling.js";
@@ -1650,7 +1651,11 @@ program
   .description("Show actionable fix suggestions: dead exports, code smells, security issues")
   .option("--json", "Output as JSON")
   .option("-p, --priority <n>", "Only show fixes of priority ≤ n (1=must, 2=should, 3=nice)", (v) => parseInt(v, 10), 3)
-  .action(async (dir: string | undefined, opts: { json?: boolean; priority: number }) => {
+  .option("--ai", "Use Claude API to generate concrete refactored code for each issue (requires ANTHROPIC_API_KEY)")
+  .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
+  .option("--model <id>", "Claude model ID (default: claude-sonnet-4-6)")
+  .option("--limit <n>", "Max issues to send to AI per run (default 3)", (v) => parseInt(v, 10), 3)
+  .action(async (dir: string | undefined, opts: { json?: boolean; priority: number; ai?: boolean; apiKey?: string; model?: string; limit: number }) => {
     const { abs, rel } = resolveArg(dir ?? ".");
     if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
 
@@ -1674,6 +1679,48 @@ program
       .filter((s) => s.priority <= opts.priority)
       .sort((a, b) => a.priority - b.priority || a.file.localeCompare(b.file));
 
+    if (opts.ai) {
+      // ── AI refactor mode ────────────────────────────────────────────────────
+      const aiOpts = { apiKey: opts.apiKey, model: opts.model };
+      const targets: Parameters<typeof aiRefactorBatch>[0] = [];
+      for (const skel of skeletons.slice(0, opts.limit)) {
+        const fileAbs = path.resolve(ROOT, skel.file);
+        const source = readSource(fileAbs);
+        const smells = detectSmells(skel, source.split("\n").length);
+        for (const smell of smells.slice(0, Math.max(1, Math.floor(opts.limit / skeletons.length) || 1))) {
+          if (targets.length >= opts.limit) break;
+          targets.push({ kind: "smell", smell, sourceCode: source, filePath: skel.file, language: skel.language });
+        }
+        const secIssues = scanFileForSecurityIssues(source, skel.file);
+        for (const sec of secIssues) {
+          if (targets.length >= opts.limit) break;
+          targets.push({ kind: "security", security: sec, sourceCode: source, filePath: skel.file, language: skel.language });
+        }
+      }
+      if (targets.length === 0) { console.log(green("✓ No issues found to refactor.")); return; }
+
+      console.log(dim(`Sending ${targets.length} issue(s) to Claude…`));
+      const results = await aiRefactorBatch(targets, aiOpts);
+
+      if (opts.json) return jsonOut({ directory: rel, results });
+
+      header(`AI Refactor — ${rel}/`);
+      for (const r of results) {
+        if (r.error) {
+          console.log(indent(yellow(`⚠ ${r.issue}: ${r.error}`)));
+          continue;
+        }
+        console.log(indent(`${cyan(bold(r.issue))}  ${dim(r.filePath)}`));
+        console.log(indent(dim("before:"), 4));
+        for (const line of r.before.split("\n").slice(0, 8)) console.log(indent(red(line), 6));
+        console.log(indent(dim("after:"), 4));
+        for (const line of r.after.split("\n").slice(0, 8)) console.log(indent(green(line), 6));
+        console.log(indent(r.explanation, 4));
+        console.log();
+      }
+      return;
+    }
+
     if (opts.json) return jsonOut({ directory: rel, count: suggestions.length, suggestions });
 
     header(`Fix Suggestions — ${rel}/`);
@@ -1696,6 +1743,80 @@ program
       const p3 = suggestions.filter(s => s.priority === 3).length;
       console.log(indent(`${red(`${p1} must`)} · ${yellow(`${p2} should`)} · ${dim(`${p3} nice`)}`));
     }
+    console.log();
+  });
+
+// ─── Command: init ────────────────────────────────────────────────────────────
+
+program
+  .command("init")
+  .description("Create .ast-map.json config file with sensible defaults (interactive)")
+  .option("--defaults", "Write defaults without prompting")
+  .option("--json", "Output the generated config as JSON (no file written)")
+  .action(async (opts: { defaults?: boolean; json?: boolean }) => {
+    const configPath = path.join(ROOT, ".ast-map.json");
+
+    const defaults = {
+      cache: true,
+      detail: "outline",
+      ignore: ["dist", "build", "node_modules", ".next", "out", "coverage", "__pycache__"],
+      thresholds: {
+        minScore: 70,
+        maxCycles: 0,
+        maxDeadExports: 10,
+        maxComplexity: 20,
+      },
+      smells: {
+        maxMethods: 10,
+        maxFields: 8,
+        maxMethodLines: 60,
+        maxParams: 4,
+      },
+      security: {
+        minSeverity: "medium",
+      },
+      layers: {
+        rules: [],
+      },
+    };
+
+    if (opts.json) { jsonOut(defaults); return; }
+
+    if (!opts.defaults) {
+      // Simple prompt loop via readline (Node.js built-in)
+      const { createInterface } = await import("node:readline");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (q: string, def: string): Promise<string> =>
+        new Promise((res) => rl.question(`${dim(q)} ${gray(`[${def}]`)} `, (ans) => res(ans.trim() || def)));
+
+      header("AST Map — Config Init");
+      console.log(dim("  Press Enter to accept defaults.\n"));
+
+      const minScore = parseInt(await ask("Min health score (0-100):", String(defaults.thresholds.minScore)), 10);
+      const maxCycles = parseInt(await ask("Max circular deps:", String(defaults.thresholds.maxCycles)), 10);
+      const maxComplexity = parseInt(await ask("Max cyclomatic complexity:", String(defaults.thresholds.maxComplexity)), 10);
+      const maxMethodLines = parseInt(await ask("Max method lines (smell):", String(defaults.smells.maxMethodLines)), 10);
+      const minSev = await ask("Min security severity (critical/high/medium/low):", defaults.security.minSeverity);
+      const ignoreRaw = await ask("Additional ignore dirs (comma-separated):", "");
+
+      rl.close();
+
+      if (!isNaN(minScore)) defaults.thresholds.minScore = minScore;
+      if (!isNaN(maxCycles)) defaults.thresholds.maxCycles = maxCycles;
+      if (!isNaN(maxComplexity)) defaults.thresholds.maxComplexity = maxComplexity;
+      if (!isNaN(maxMethodLines)) defaults.smells.maxMethodLines = maxMethodLines;
+      if (["critical", "high", "medium", "low"].includes(minSev)) defaults.security.minSeverity = minSev;
+      if (ignoreRaw.trim()) {
+        defaults.ignore.push(...ignoreRaw.split(",").map((s) => s.trim()).filter(Boolean));
+      }
+    }
+
+    if (fs.existsSync(configPath)) {
+      console.log(yellow("⚠") + ` .ast-map.json already exists — overwriting.`);
+    }
+    fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2) + "\n", "utf8");
+    console.log(green("✓") + ` .ast-map.json created at ${configPath}`);
+    console.log(dim("  Edit it freely — ast-map reads it on every run."));
     console.log();
   });
 
@@ -1810,6 +1931,9 @@ ${bold("Examples:")}
   ast-map security src/ --severity high
   ast-map diagram src/ --type deps -o graph.md --md
   ast-map fix src/ --priority 2
+  ast-map fix src/ --ai
+  ast-map init
+  ast-map init --defaults
 
 ${bold("Root:")}
   Defaults to cwd. Override with AST_MAP_ROOT=<path> or run from your project root.
