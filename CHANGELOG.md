@@ -6,11 +6,23 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.5] — 2026-06-21 · patch
+
+- **feat:** node highlight on hover in Dependency Graph — connected nodes stay bright, unconnected nodes dim to 10% opacity
+- **feat:** Files page detail panel — click any file to see symbols, smells, and metadata in a side panel
+- **feat:** 🌡️ Complexity Map page — D3 treemap (size = LOC, color = smells density, green → red) with tooltip
+- **feat:** Dependency Graph search/filter — type to highlight matching nodes, dim everything else
+- **feat:** Export JSON button on every Run Commands result tab — downloads raw data as `<cmd>-export.json`
+- **feat:** Smells filter bar — filter by severity (error/warning/info) + file pattern
+- **feat:** Security filter bar — filter by severity (critical/high/medium/low) + file pattern
+
+---
 ## [2.0.4] — 2026-06-21 · patch
 
 - **feat:** overhaul Dependency Graph in `ast-map serve` web UI — visible edges with directional arrows, file name labels on every node, node size/shade scaled by connection count (hub files are larger/brighter), scroll-to-zoom + drag-to-pan via `d3.zoom`, collision force to prevent overlap, tooltip shows full path + connection count
 
 ---
+
 
 ## [2.0.3] — 2026-06-21 · patch
 
