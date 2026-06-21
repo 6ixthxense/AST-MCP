@@ -6,6 +6,12 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.4] — 2026-06-21 · patch
+
+- **feat:** overhaul Dependency Graph in `ast-map serve` web UI — visible edges with directional arrows, file name labels on every node, node size/shade scaled by connection count (hub files are larger/brighter), scroll-to-zoom + drag-to-pan via `d3.zoom`, collision force to prevent overlap, tooltip shows full path + connection count
+
+---
+
 ## [2.0.3] — 2026-06-21 · patch
 
 - **fix:** resolve `Uncaught SyntaxError: Unexpected string` in `ast-map serve` web UI that made all Run Commands buttons inoperable — `\'` sequences inside the TypeScript template literal were being consumed to bare `'`, producing adjacent JS string literals the browser parser rejected; refactored `renderRun()` to use `data-cmd`/`data-run` attributes with delegated event listeners instead of inline `onclick`/`onkeydown` handlers
