@@ -16,7 +16,7 @@ import {
 } from "./skeleton.js";
 import { renderHtml, renderCombinedHtml } from "./html.js";
 import { detectLanguage, supportedLanguages } from "./registry.js";
-import type { SkeletonFile } from "./types.js";
+import type { SkeletonFile, SymbolNode } from "./types.js";
 import {
   findSymbol,
   findRelatedSymbols,
@@ -94,7 +94,38 @@ function writeHtml(skel: SkeletonFile, rel: string, opts: SkeletonOptions): stri
 }
 
 function jsonText(value: unknown): { content: { type: "text"; text: string }[] } {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+/** Strip debug/null fields from a SymbolNode to reduce token usage. */
+function pruneSymbol(sym: SymbolNode): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    name: sym.name,
+    kind: sym.kind,
+    visibility: sym.visibility,
+    range: sym.range,
+  };
+  if (sym.exported) out.exported = true;
+  if (sym.signature) out.signature = sym.signature;
+  if (sym.doc) out.doc = sym.doc;
+  if (sym.propsType) out.propsType = sym.propsType;
+  if (sym.props && sym.props.length > 0) out.props = sym.props;
+  if (sym.decorators && sym.decorators.length > 0) out.decorators = sym.decorators;
+  if (sym.children && sym.children.length > 0) out.children = sym.children.map(pruneSymbol);
+  return out;
+}
+
+/** Strip metadata-only fields from a SkeletonFile to reduce token usage. */
+function pruneSkeletonFile(skel: SkeletonFile): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    file: skel.file,
+    language: skel.language,
+    symbolCount: skel.symbolCount,
+    symbols: skel.symbols.map(pruneSymbol),
+  };
+  if (skel.directives && skel.directives.length > 0) out.directives = skel.directives;
+  if (skel.imports && skel.imports.length > 0) out.imports = skel.imports;
+  return out;
 }
 
 function errorText(message: string) {
@@ -159,7 +190,7 @@ server.registerTool(
       }
       const opts = resolveOptions({ detail, emitHtml: false });
       const skel = await buildSkeleton(abs, rel, opts);
-      return jsonText(skel);
+      return jsonText(pruneSkeletonFile(skel));
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -251,7 +282,7 @@ server.registerTool(
       // single file
       const skel = await buildSkeleton(abs, rel, opts);
       const htmlPath = opts.emitHtml ? writeHtml(skel, rel, opts) : null;
-      return jsonText({ mode: "file", htmlPath, skeleton: skel });
+      return jsonText({ mode: "file", htmlPath, skeleton: pruneSkeletonFile(skel) });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -551,8 +582,8 @@ server.registerTool(
       }
 
       // Guard against bloated inline responses for large graphs.
-      // 2000 nodes ≈ ~50–80 source files; beyond that inline JSON becomes unusable in an MCP context.
-      const INLINE_NODE_LIMIT = 2000;
+      // 400 nodes ≈ ~10–15 source files; beyond that inline JSON becomes unusable in an MCP context.
+      const INLINE_NODE_LIMIT = 400;
       if (graph.nodes.length > INLINE_NODE_LIMIT) {
         return jsonText({
           directory: rel,
@@ -595,9 +626,14 @@ server.registerTool(
         .enum(["outline", "full"])
         .optional()
         .describe('"outline" (default) is sufficient for dead-code detection.'),
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe("Max dead exports to return (default 100). Use 0 for all."),
     },
   },
-  async ({ path: input, detail }) => {
+  async ({ path: input, detail, limit }) => {
     try {
       const { abs, rel, root } = resolveInRoot(input);
       if (!fs.statSync(abs).isDirectory()) {
@@ -620,13 +656,16 @@ server.registerTool(
 
       const graph = buildSymbolGraph(skeletons, root);
       const dead = findDeadExports(graph);
+      const cap = limit === 0 ? dead.length : (limit ?? 100);
+      const deadExports = dead.slice(0, cap);
 
       return jsonText({
         directory: rel.split(path.sep).join("/"),
         scanned: files.length,
         deadExportCount: dead.length,
+        ...(dead.length > cap ? { truncated: true, showing: cap } : {}),
         ...(errors.length > 0 ? { errors } : {}),
-        deadExports: dead,
+        deadExports,
       });
     } catch (err) {
       return errorText(describeError(err));
@@ -1572,9 +1611,14 @@ server.registerTool(
       max_fields: z.number().int().optional().describe("God-class threshold: max fields (default 8)."),
       max_method_lines: z.number().int().optional().describe("Long-method threshold: max lines (default 60)."),
       max_params: z.number().int().optional().describe("Long-param-list threshold: max params (default 4)."),
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe("Max smells to return (default 100). Use 0 for all."),
     },
   },
-  async ({ path: input, max_methods, max_fields, max_method_lines, max_params }) => {
+  async ({ path: input, max_methods, max_fields, max_method_lines, max_params, limit }) => {
     try {
       const { abs, rel, root } = resolveInRoot(input);
       const opts = resolveOptions({ detail: "full", emitHtml: false });
@@ -1589,7 +1633,9 @@ server.registerTool(
           allSmells.push(...detectSmells(skel, lineCount, smellOpts));
         } catch { /* skip */ }
       }
-      return jsonText({ path: rel, scanned: filesToScan.length, total: allSmells.length, smells: allSmells });
+      const cap = limit === 0 ? allSmells.length : (limit ?? 100);
+      const smells = allSmells.slice(0, cap);
+      return jsonText({ path: rel, scanned: filesToScan.length, total: allSmells.length, ...(allSmells.length > cap ? { truncated: true, showing: cap } : {}), smells });
     } catch (err) { return errorText(describeError(err)); }
   },
 );
@@ -1609,9 +1655,14 @@ server.registerTool(
         .enum(["critical", "high", "medium", "low"])
         .optional()
         .describe("Only return issues at or above this severity (default: low = all)."),
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe("Max issues to return (default 100). Use 0 for all."),
     },
   },
-  async ({ path: input, min_severity }) => {
+  async ({ path: input, min_severity, limit }) => {
     try {
       const { abs, rel, root } = resolveInRoot(input);
       const opts = resolveOptions({ detail: "outline", emitHtml: false });
@@ -1627,7 +1678,9 @@ server.registerTool(
           allIssues.push(...issues.filter((i) => order.indexOf(i.severity as (typeof order)[number]) <= minIdx));
         } catch { /* skip */ }
       }
-      return jsonText({ path: rel, scanned: filesToScan.length, total: allIssues.length, issues: allIssues });
+      const cap = limit === 0 ? allIssues.length : (limit ?? 100);
+      const issues = allIssues.slice(0, cap);
+      return jsonText({ path: rel, scanned: filesToScan.length, total: allIssues.length, ...(allIssues.length > cap ? { truncated: true, showing: cap } : {}), issues });
     } catch (err) { return errorText(describeError(err)); }
   },
 );
