@@ -309,34 +309,77 @@ function filterSymbols() {
 function renderGraph() {
   const g = state.graph;
   if (!g) return;
+  const svgEl = document.getElementById('graph-canvas');
   const svg = d3.select('#graph-canvas');
   svg.selectAll('*').remove();
-  const W = document.getElementById('graph-canvas').clientWidth || 800;
-  const H = document.getElementById('graph-canvas').clientHeight || 500;
-  const fileNodes = g.nodes.filter(n => n.nodeType === 'file').slice(0, 60);
+  const W = svgEl.clientWidth || 800;
+  const H = svgEl.clientHeight || 500;
+
+  const fileNodes = g.nodes.filter(n => n.nodeType === 'file').slice(0, 80).map(n => Object.assign({}, n));
   const nodeIds = new Set(fileNodes.map(n => n.id));
-  const links = g.edges.filter(e => e.edgeType === 'imports' && nodeIds.has(e.from) && nodeIds.has(e.to))
+  const links = g.edges
+    .filter(e => e.edgeType === 'imports' && nodeIds.has(e.from) && nodeIds.has(e.to))
     .map(e => ({ source: e.from, target: e.to }));
 
-  const sim = d3.forceSimulation(fileNodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(80))
-    .force('charge', d3.forceManyBody().strength(-120))
-    .force('center', d3.forceCenter(W / 2, H / 2));
+  const degree = {};
+  fileNodes.forEach(n => { degree[n.id] = 0; });
+  links.forEach(l => { degree[l.source] = (degree[l.source]||0)+1; degree[l.target] = (degree[l.target]||0)+1; });
+  const maxDeg = Math.max(1, ...Object.values(degree));
 
-  const link = svg.append('g').selectAll('line').data(links).join('line')
-    .attr('stroke', '#2d3142').attr('stroke-width', 1);
-  const node = svg.append('g').selectAll('circle').data(fileNodes).join('circle')
-    .attr('r', 6).attr('fill', '#7c3aed').attr('cursor', 'pointer')
-    .call(d3.drag().on('start', e => { if (!e.active) sim.alphaTarget(.3).restart(); e.subject.fx = e.subject.x; e.subject.fy = e.subject.y; })
+  svg.append('defs').append('marker')
+    .attr('id', 'arr').attr('viewBox', '0 -4 8 8').attr('refX', 14).attr('refY', 0)
+    .attr('markerWidth', 5).attr('markerHeight', 5).attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#6d28d9');
+
+  const zoom = d3.zoom().scaleExtent([0.15, 4]).on('zoom', e => container.attr('transform', e.transform));
+  svg.call(zoom);
+  const container = svg.append('g');
+
+  svg.append('text').attr('x', W - 10).attr('y', H - 10)
+    .attr('text-anchor', 'end').attr('font-size', '11px').attr('fill', '#475569')
+    .text('scroll to zoom · drag to pan · drag nodes to arrange');
+
+  const sim = d3.forceSimulation(fileNodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(110))
+    .force('charge', d3.forceManyBody().strength(-250))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collision', d3.forceCollide(32));
+
+  const linkG = container.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke', '#6d28d9').attr('stroke-width', 1.5).attr('stroke-opacity', 0.45)
+    .attr('marker-end', 'url(#arr)');
+
+  const nodeG = container.append('g').selectAll('g').data(fileNodes).join('g')
+    .attr('cursor', 'pointer')
+    .call(d3.drag()
+      .on('start', e => { if (!e.active) sim.alphaTarget(.3).restart(); e.subject.fx = e.subject.x; e.subject.fy = e.subject.y; })
       .on('drag', e => { e.subject.fx = e.x; e.subject.fy = e.y; })
-      .on('end', e => { if (!e.active) sim.alphaTarget(0); e.subject.fx = null; e.subject.fy = null; }))
-    .on('mouseover', (ev, d) => { const t = document.getElementById('tooltip'); t.style.display='block'; t.style.left=ev.clientX+12+'px'; t.style.top=ev.clientY+'px'; t.textContent=d.id; })
-    .on('mouseout', () => { document.getElementById('tooltip').style.display='none'; });
+      .on('end', e => { if (!e.active) sim.alphaTarget(0); e.subject.fx = null; e.subject.fy = null; }));
+
+  nodeG.append('circle')
+    .attr('r', d => 7 + Math.round((degree[d.id]||0) / maxDeg * 10))
+    .attr('fill', d => degree[d.id] > maxDeg * 0.6 ? '#7c3aed' : degree[d.id] > maxDeg * 0.3 ? '#6d28d9' : '#4c1d95')
+    .attr('fill-opacity', 0.92)
+    .attr('stroke', '#a78bfa').attr('stroke-width', 1.5);
+
+  nodeG.append('text')
+    .text(d => d.id.split('/').pop().replace(/\.[^.]+$/, ''))
+    .attr('font-size', '10px').attr('fill', '#cbd5e1').attr('text-anchor', 'middle')
+    .attr('dy', d => 7 + Math.round((degree[d.id]||0) / maxDeg * 10) + 13)
+    .attr('pointer-events', 'none');
+
+  nodeG
+    .on('mouseover', (ev, d) => {
+      const t = document.getElementById('tooltip');
+      t.style.display = 'block'; t.style.left = ev.clientX + 14 + 'px'; t.style.top = ev.clientY + 'px';
+      t.innerHTML = \`<b>\${d.id}</b><br><span style="color:var(--muted)">connections: \${degree[d.id]||0}</span>\`;
+    })
+    .on('mouseout', () => { document.getElementById('tooltip').style.display = 'none'; });
 
   sim.on('tick', () => {
-    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-    node.attr('cx', d => d.x).attr('cy', d => d.y);
+    linkG.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+         .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    nodeG.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
   });
 }
 
