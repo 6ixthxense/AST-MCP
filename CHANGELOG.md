@@ -6,6 +6,12 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.2] — 2026-06-21 · patch
+
+- **feat:** interactive **Run Commands** page in `ast-map serve` web UI — 15 one-click analysis commands (dead exports, circular deps, duplicates, similar code, complexity, symbol search, change impact, file deps, explain symbol, code smells, security scan, arch rules, Mermaid diagram, Markdown docs, top symbols) with a two-panel layout: command palette on the left, closeable result tabs on the right
+
+---
+
 ## [2.0.1] — 2026-06-21 · patch
 
 - **fix:** add `prepare` script so `dist/` is built automatically on `npm install` (cloners no longer need a separate `npm run build`)
