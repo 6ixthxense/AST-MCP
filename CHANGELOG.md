@@ -6,6 +6,12 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.3] — 2026-06-21 · patch
+
+- **fix:** resolve `Uncaught SyntaxError: Unexpected string` in `ast-map serve` web UI that made all Run Commands buttons inoperable — `\'` sequences inside the TypeScript template literal were being consumed to bare `'`, producing adjacent JS string literals the browser parser rejected; refactored `renderRun()` to use `data-cmd`/`data-run` attributes with delegated event listeners instead of inline `onclick`/`onkeydown` handlers
+
+---
+
 ## [2.0.2] — 2026-06-21 · patch
 
 - **feat:** interactive **Run Commands** page in `ast-map serve` web UI — 15 one-click analysis commands (dead exports, circular deps, duplicates, similar code, complexity, symbol search, change impact, file deps, explain symbol, code smells, security scan, arch rules, Mermaid diagram, Markdown docs, top symbols) with a two-panel layout: command palette on the left, closeable result tabs on the right
