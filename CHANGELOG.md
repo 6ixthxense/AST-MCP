@@ -6,6 +6,15 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.1] — 2026-06-21 · patch
+
+- **fix:** add `prepare` script so `dist/` is built automatically on `npm install` (cloners no longer need a separate `npm run build`)
+- **fix:** bump `hono` transitive dep via `npm audit fix` (path traversal + CORS issues in unused middleware; no runtime impact on stdio MCP server)
+- **docs:** comprehensive README update — 44 MCP tools / 49 CLI commands, all v1.33–v2.0 features documented, `arch.rules` config, updated project layout, full changelog
+- **ci:** `example-validate.yml` now builds from source instead of relying on published npm package; `action.yml` switches from `npx -p` to `npm exec --package` (npm 10 compatibility)
+
+---
+
 ## [2.0.0] — 2026-06-20 · persistent index, live reload, TF-IDF rerank, auto-patch, arch rules, doc gen
 
 ### Breaking
