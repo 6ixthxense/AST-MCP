@@ -417,18 +417,26 @@ function renderRun() {
   CMDS.forEach(function(g) {
     html += '<div class="cmd-group-label">' + g.group + '</div>';
     g.items.forEach(function(cmd) {
-      html += '<button class="cmd-btn" title="' + esc(cmd.desc) + '" onclick="toggleForm(\'' + cmd.id + '\')">' + cmd.label + '</button>';
+      html += '<button class="cmd-btn" title="' + esc(cmd.desc) + '" data-cmd="' + cmd.id + '">' + cmd.label + '</button>';
       if (cmd.fields) {
         html += '<div class="cmd-form" id="form-' + cmd.id + '">';
         cmd.fields.forEach(function(f) {
-          html += '<input class="cmd-input" id="inp-' + cmd.id + '-' + f.name + '" placeholder="' + esc(f.ph) + '" onkeydown="if(event.key===\'Enter\')runCmd(\'' + cmd.id + '\')" />';
+          html += '<input class="cmd-input" id="inp-' + cmd.id + '-' + f.name + '" placeholder="' + esc(f.ph) + '" data-run="' + cmd.id + '" />';
         });
-        html += '<button class="cmd-run-btn" onclick="runCmd(\'' + cmd.id + '\')">Run ▶</button>';
+        html += '<button class="cmd-run-btn" data-run="' + cmd.id + '">▶ Run</button>';
         html += '</div>';
       }
     });
   });
   panel.innerHTML = html;
+  panel.addEventListener('click', function(e) {
+    var t = e.target;
+    if (t.dataset.run) { runCmd(t.dataset.run); return; }
+    if (t.dataset.cmd) { toggleForm(t.dataset.cmd); }
+  });
+  panel.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && e.target.dataset.run) runCmd(e.target.dataset.run);
+  });
 }
 
 function findCmd(id) {
