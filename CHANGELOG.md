@@ -6,6 +6,16 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.6] — 2026-06-21 · patch
+
+- **perf:** switch all MCP tool responses to compact JSON (no indent) — ~20% token reduction on every call
+- **perf:** skeleton responses now strip null/empty fields (`rawKind`, null `doc`/`signature`, empty `props`/`decorators`/`children`) via `pruneSymbol()` + `pruneSkeletonFile()` — significant token reduction on dense TypeScript files
+- **perf:** reduce `INLINE_NODE_LIMIT` from 2000 → 400 in `build_symbol_graph` — prevents accidental ~4 MB inline graph payloads
+- **feat:** add `limit` parameter to `find_dead_code`, `detect_code_smells`, `scan_security` — defaults to 100, use `0` for all; responses include `truncated` + `showing` when capped
+
+---
+
+
 ## [2.0.5] — 2026-06-21 · patch
 
 - **feat:** node highlight on hover in Dependency Graph — connected nodes stay bright, unconnected nodes dim to 10% opacity
