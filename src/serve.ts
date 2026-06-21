@@ -12,6 +12,14 @@ import { scanFileForSecurityIssues } from "./security.js";
 import { buildSkeletonsBulk } from "./pool.js";
 import type { SkeletonFile } from "./types.js";
 import { webAppHtml } from "./webapp.js";
+import { computeFileComplexity } from "./complexity.js";
+import { findDuplicateSymbols, getChangeImpact, getFileDeps } from "./graph-analysis.js";
+import { findSimilar } from "./similar.js";
+import { checkArchRules, loadArchRules } from "./arch-rules.js";
+import { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } from "./diagram.js";
+import { buildDocOutput, renderMarkdown } from "./docgen.js";
+import { buildExplainResult } from "./explain.js";
+import { searchSymbols } from "./search.js";
 
 export interface ServeOptions {
   port?: number;
@@ -20,6 +28,15 @@ export interface ServeOptions {
   open?: boolean;
   /** Enable fs.watch and push SSE events to connected clients. */
   watch?: boolean;
+}
+
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
 }
 
 export async function startServe(opts: ServeOptions): Promise<http.Server> {
@@ -71,6 +88,13 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
     try {
+      if (req.method === "OPTIONS") {
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
       if (pathname === "/" || pathname === "/index.html") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(webAppHtml(port));
@@ -186,6 +210,121 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(all, null, 2));
+        return;
+      }
+
+      if (pathname === "/api/run" && req.method === "POST") {
+        const body = await readBody(req);
+        const { cmd, args = {} } = JSON.parse(body) as { cmd: string; args: Record<string, unknown> };
+        const skeletons = await getSkeletons();
+        const graph = buildSymbolGraph(skeletons, root);
+        let data: unknown;
+
+        switch (cmd) {
+          case "dead":
+            data = findDeadExports(graph);
+            break;
+          case "cycles":
+            data = findCircularDeps(graph);
+            break;
+          case "duplicates":
+            data = findDuplicateSymbols(graph);
+            break;
+          case "top":
+            data = getTopSymbols(graph, (args.limit as number) ?? 20);
+            break;
+          case "similar":
+            data = findSimilar(skeletons, { minGroupSize: (args.minGroupSize as number) ?? 2 });
+            break;
+          case "smells": {
+            const all: ReturnType<typeof detectSmells> = [];
+            for (const skel of skeletons) {
+              try {
+                const src = fs.readFileSync(path.resolve(root, skel.file), "utf8");
+                all.push(...detectSmells(skel, src.split("\n").length));
+              } catch { /* skip */ }
+            }
+            data = all;
+            break;
+          }
+          case "security": {
+            const all: ReturnType<typeof scanFileForSecurityIssues> = [];
+            for (const skel of skeletons) {
+              try {
+                const src = fs.readFileSync(path.resolve(root, skel.file), "utf8");
+                all.push(...scanFileForSecurityIssues(src, skel.file));
+              } catch { /* skip */ }
+            }
+            data = all;
+            break;
+          }
+          case "complexity": {
+            const results = [];
+            for (const skel of skeletons) {
+              try {
+                results.push(await computeFileComplexity(path.resolve(root, skel.file), skel.file));
+              } catch { /* skip */ }
+            }
+            data = results;
+            break;
+          }
+          case "find": {
+            if (!args.query) throw new Error("query required");
+            data = await searchSymbols(scanDir, args.query as string, root, {
+              matchType: (args.matchType as "exact" | "contains" | "regex") ?? "contains",
+              kind: args.kind as string | undefined,
+            });
+            break;
+          }
+          case "impact": {
+            if (!args.symbol) throw new Error("symbol required");
+            data = getChangeImpact(graph, args.symbol as string);
+            break;
+          }
+          case "fileDeps": {
+            if (!args.file) throw new Error("file required");
+            data = getFileDeps(graph, args.file as string);
+            break;
+          }
+          case "explain": {
+            if (!args.file || !args.symbol) throw new Error("file and symbol required");
+            const skel = skeletons.find(
+              (s) => s.file === args.file || s.file.endsWith(args.file as string)
+            );
+            if (!skel) throw new Error(`File not found: ${args.file}`);
+            const nodeId = `${skel.file}::${args.symbol}`;
+            const impact = getChangeImpact(graph, nodeId);
+            data = buildExplainResult(args.symbol as string, skel, graph, impact, []);
+            break;
+          }
+          case "arch": {
+            const cfg = loadProjectConfig(root);
+            const rules = loadArchRules(cfg);
+            data = checkArchRules(graph, rules);
+            break;
+          }
+          case "diagram": {
+            const type = (args.type as string) ?? "deps";
+            if (type === "class") data = buildClassDiagram(skeletons);
+            else if (type === "modules") data = buildModulesDiagram(graph);
+            else data = buildDepsDiagram(graph, (args.maxNodes as number) ?? 50);
+            break;
+          }
+          case "doc": {
+            const docOut = buildDocOutput(skeletons, { exportedOnly: (args.exportedOnly as boolean) ?? false });
+            data = {
+              markdown: renderMarkdown(docOut),
+              files: docOut.files.length,
+              symbols: docOut.files.reduce((a: number, f) => a + f.symbols.length, 0),
+            };
+            break;
+          }
+          default:
+            throw new Error(`Unknown command: ${cmd}`);
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, cmd, data }));
         return;
       }
 

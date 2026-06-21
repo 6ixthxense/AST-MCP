@@ -55,6 +55,29 @@ export function webAppHtml(port: number): string {
   .error-box { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 6px; padding: 12px 16px; color: var(--red); font-size: 13px; margin-top: 8px; }
   .loading { color: var(--muted); font-size: 13px; padding: 32px; text-align: center; }
   .timeline { height: 120px; width: 100%; }
+  .run-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; height: calc(100vh - 120px); }
+  .cmd-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-y: auto; padding: 10px; }
+  .cmd-group-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); padding: 10px 6px 4px; }
+  .cmd-btn { width: 100%; text-align: left; padding: 8px 10px; border: none; border-radius: 6px; background: transparent; color: var(--text); font-size: 13px; cursor: pointer; display: block; margin-bottom: 1px; }
+  .cmd-btn:hover { background: rgba(124,58,237,.15); color: var(--accent); }
+  .cmd-form { padding: 4px 10px 8px; display: none; }
+  .cmd-form.open { display: block; }
+  .cmd-input { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; color: var(--text); font-size: 12px; margin-bottom: 4px; outline: none; }
+  .cmd-input:focus { border-color: var(--accent); }
+  .cmd-run-btn { padding: 5px 14px; background: var(--accent); border: none; border-radius: 4px; color: #fff; font-size: 12px; cursor: pointer; }
+  .result-panel { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .tab-bar { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; background: var(--bg); min-height: 36px; }
+  .tab { display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 12px; cursor: pointer; border-right: 1px solid var(--border); white-space: nowrap; color: var(--muted); user-select: none; }
+  .tab.active { background: var(--surface); color: var(--text); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
+  .tab-close { opacity: .5; line-height: 1; }
+  .tab-close:hover { opacity: 1; }
+  .tab-content { flex: 1; overflow-y: auto; padding: 16px; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  .result-pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; white-space: pre-wrap; overflow-x: auto; max-height: 500px; overflow-y: auto; }
+  .empty-tabs { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--muted); font-size: 13px; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -71,6 +94,8 @@ export function webAppHtml(port: number): string {
   <div class="nav-item" data-page="smells">🤢 Code Smells</div>
   <div class="nav-item" data-page="security">🔒 Security</div>
   <div class="nav-item" data-page="dead">💀 Dead Code</div>
+  <div class="nav-section">Commands</div>
+  <div class="nav-item" data-page="run">⚡ Run Commands</div>
 </div>
 
 <div id="main">
@@ -132,6 +157,21 @@ export function webAppHtml(port: number): string {
     <div class="subtitle">Exported symbols with no known importers inside the scanned directory</div>
     <div class="card"><table><thead><tr><th>Symbol</th><th>Kind</th><th>File</th><th>Confidence</th></tr></thead><tbody id="dead-table"></tbody></table></div>
   </div>
+
+  <!-- RUN COMMANDS -->
+  <div class="page" id="page-run">
+    <div class="header-row"><h1>Run Commands</h1></div>
+    <div class="subtitle">Interactive analysis — click a command to run it instantly</div>
+    <div class="run-layout">
+      <div class="cmd-panel" id="cmd-panel"></div>
+      <div class="result-panel">
+        <div class="tab-bar" id="tab-bar"></div>
+        <div class="tab-content" id="tab-content">
+          <div class="empty-tabs" id="empty-tabs">↑ Pick a command to run</div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="tooltip" id="tooltip"></div>
@@ -181,6 +221,7 @@ function renderPage(name) {
   else if (name === 'smells') renderSmells();
   else if (name === 'security') renderSecurity();
   else if (name === 'dead') renderDead();
+  else if (name === 'run') renderRun();
 }
 
 function grade(s) { return s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F'; }
@@ -325,6 +366,270 @@ function renderDead() {
 }
 
 function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ─── Run Commands ─────────────────────────────────────────────────────────────
+var CMDS = [
+  { group: 'Analysis', items: [
+    { id: 'dead', label: '💀 Dead Exports', desc: 'Find unused exported symbols' },
+    { id: 'cycles', label: '🔄 Circular Deps', desc: 'Circular dependency chains' },
+    { id: 'duplicates', label: '♊ Duplicates', desc: 'Symbols defined more than once' },
+    { id: 'similar', label: '🔍 Similar Code', desc: 'Structurally similar functions' },
+    { id: 'complexity', label: '📊 Complexity', desc: 'Cyclomatic complexity per file' },
+    { id: 'top', label: '🏆 Top Symbols', desc: 'Most imported symbols' }
+  ]},
+  { group: 'Quality', items: [
+    { id: 'smells', label: '🤢 Code Smells', desc: 'Detect anti-patterns' },
+    { id: 'security', label: '🔒 Security Scan', desc: 'Security vulnerabilities' },
+    { id: 'arch', label: '🏛️ Arch Rules', desc: 'Architecture rule violations' }
+  ]},
+  { group: 'Search & Explore', items: [
+    { id: 'find', label: '🔎 Find Symbol', desc: 'Search symbols by name', fields: [
+      { name: 'query', ph: 'Symbol name…', req: true },
+      { name: 'kind', ph: 'Kind filter (fn, class…)', req: false }
+    ]},
+    { id: 'impact', label: '💥 Change Impact', desc: 'Blast radius of changing a symbol', fields: [
+      { name: 'symbol', ph: 'file.ts::SymbolName', req: true }
+    ]},
+    { id: 'fileDeps', label: '📦 File Deps', desc: 'What a file imports and who imports it', fields: [
+      { name: 'file', ph: 'src/foo.ts', req: true }
+    ]},
+    { id: 'explain', label: '💡 Explain Symbol', desc: 'Full structural context of a symbol', fields: [
+      { name: 'file', ph: 'src/foo.ts', req: true },
+      { name: 'symbol', ph: 'SymbolName', req: true }
+    ]}
+  ]},
+  { group: 'Generate', items: [
+    { id: 'diagram', label: '🕸️ Diagram', desc: 'Mermaid diagram of the codebase', fields: [
+      { name: 'type', ph: 'deps | class | modules', req: false }
+    ]},
+    { id: 'doc', label: '📝 Docs', desc: 'Generate Markdown documentation' }
+  ]}
+];
+
+var _tabCount = 0;
+var _runInit = false;
+
+function renderRun() {
+  if (_runInit) return;
+  _runInit = true;
+  var panel = document.getElementById('cmd-panel');
+  var html = '';
+  CMDS.forEach(function(g) {
+    html += '<div class="cmd-group-label">' + g.group + '</div>';
+    g.items.forEach(function(cmd) {
+      html += '<button class="cmd-btn" title="' + esc(cmd.desc) + '" onclick="toggleForm(\'' + cmd.id + '\')">' + cmd.label + '</button>';
+      if (cmd.fields) {
+        html += '<div class="cmd-form" id="form-' + cmd.id + '">';
+        cmd.fields.forEach(function(f) {
+          html += '<input class="cmd-input" id="inp-' + cmd.id + '-' + f.name + '" placeholder="' + esc(f.ph) + '" onkeydown="if(event.key===\'Enter\')runCmd(\'' + cmd.id + '\')" />';
+        });
+        html += '<button class="cmd-run-btn" onclick="runCmd(\'' + cmd.id + '\')">Run ▶</button>';
+        html += '</div>';
+      }
+    });
+  });
+  panel.innerHTML = html;
+}
+
+function findCmd(id) {
+  for (var i = 0; i < CMDS.length; i++) {
+    for (var j = 0; j < CMDS[i].items.length; j++) {
+      if (CMDS[i].items[j].id === id) return CMDS[i].items[j];
+    }
+  }
+  return null;
+}
+
+function toggleForm(id) {
+  var cmd = findCmd(id);
+  if (!cmd || !cmd.fields) { runCmd(id); return; }
+  var form = document.getElementById('form-' + id);
+  if (form) form.classList.toggle('open');
+}
+
+async function runCmd(id) {
+  var cmd = findCmd(id);
+  if (!cmd) return;
+  var args = {};
+  if (cmd.fields) {
+    for (var i = 0; i < cmd.fields.length; i++) {
+      var f = cmd.fields[i];
+      var inp = document.getElementById('inp-' + id + '-' + f.name);
+      var v = inp ? inp.value.trim() : '';
+      if (f.req && !v) { alert(f.name + ' is required'); return; }
+      if (v) args[f.name] = v;
+    }
+  }
+  var firstArg = args.query || args.symbol || args.file || args.type || '';
+  var label = cmd.label + (firstArg ? ': ' + firstArg : '');
+  var tabId = ++_tabCount;
+  addTab(tabId, label, '<div class="loading"><span class="spinner"></span> Running…</div>');
+  try {
+    var r = await fetch('http://localhost:${port}/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd: id, args: args })
+    });
+    var json = await r.json();
+    if (!r.ok) throw new Error(json.error || r.statusText);
+    setTabContent(tabId, renderResult(id, json.data));
+  } catch(e) {
+    setTabContent(tabId, '<div class="error-box">' + esc(e.message) + '</div>');
+  }
+}
+
+function addTab(id, label, content) {
+  var emptyEl = document.getElementById('empty-tabs');
+  if (emptyEl) emptyEl.remove();
+  var bar = document.getElementById('tab-bar');
+  var tc = document.getElementById('tab-content');
+  bar.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+  tc.querySelectorAll('.tab-pane').forEach(function(t) { t.classList.remove('active'); });
+  var tab = document.createElement('div');
+  tab.className = 'tab active';
+  tab.dataset.tab = id;
+  tab.innerHTML = '<span>' + esc(label) + '</span><span class="tab-close" onclick="closeTab(' + id + ',event)">✕</span>';
+  tab.addEventListener('click', function(e) { if (!e.target.classList.contains('tab-close')) switchTab(id); });
+  bar.appendChild(tab);
+  var pane = document.createElement('div');
+  pane.className = 'tab-pane active';
+  pane.id = 'pane-' + id;
+  pane.innerHTML = content;
+  tc.appendChild(pane);
+}
+
+function setTabContent(id, html) {
+  var pane = document.getElementById('pane-' + id);
+  if (pane) pane.innerHTML = html;
+}
+
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.toggle('active', t.dataset.tab == id); });
+  document.querySelectorAll('.tab-pane').forEach(function(t) { t.classList.toggle('active', t.id === 'pane-' + id); });
+}
+
+function closeTab(id, e) {
+  e.stopPropagation();
+  var tab = document.querySelector('.tab[data-tab="' + id + '"]');
+  var pane = document.getElementById('pane-' + id);
+  var wasActive = tab && tab.classList.contains('active');
+  if (tab) tab.remove();
+  if (pane) pane.remove();
+  if (wasActive) {
+    var remaining = document.querySelectorAll('.tab');
+    if (remaining.length > 0) {
+      switchTab(remaining[remaining.length - 1].dataset.tab);
+    } else {
+      document.getElementById('tab-content').innerHTML = '<div class="empty-tabs" id="empty-tabs">↑ Pick a command to run</div>';
+    }
+  }
+}
+
+function renderResult(cmd, data) {
+  if (data == null) return '<div style="color:var(--muted)">No results</div>';
+  if (cmd === 'dead') {
+    if (!data.length) return '<div style="color:var(--green)">No dead exports 🎉</div>';
+    return renderTable(['Symbol','Kind','File','Confidence'], data, function(d) {
+      return [d.symbol, '<span class="pill">'+esc(d.kind)+'</span>', d.file, '<span class="badge '+(d.confidence==='high'?'badge-red':'badge-yellow')+'">'+d.confidence+'</span>'];
+    });
+  }
+  if (cmd === 'cycles') {
+    if (!data.length) return '<div style="color:var(--green)">No cycles 🎉</div>';
+    return data.map(function(c) { return '<div class="card" style="margin-bottom:8px"><b>Cycle:</b> <span style="font-family:monospace;font-size:12px">'+esc((c.cycle||[]).join(' → '))+'</span></div>'; }).join('');
+  }
+  if (cmd === 'duplicates') {
+    if (!data.length) return '<div style="color:var(--green)">No duplicates 🎉</div>';
+    return renderTable(['Symbol','Kind','Files'], data, function(d) {
+      return [d.name, '<span class="pill">'+esc(d.kind)+'</span>', (d.locations||[]).map(function(l){return l.file;}).join(', ')];
+    });
+  }
+  if (cmd === 'similar') {
+    if (!data.length) return '<div style="color:var(--green)">No similar groups 🎉</div>';
+    return data.map(function(g) {
+      var members = (g.members||[]).map(function(m) { return '<span style="font-family:monospace;font-size:11px">'+esc(m.name)+' <span style="color:var(--muted)">('+esc(m.file)+')</span></span>'; }).join(', ');
+      return '<div class="card" style="margin-bottom:8px"><b>'+esc(g.kind||'similar')+'</b> — '+members+'</div>';
+    }).join('');
+  }
+  if (cmd === 'complexity') {
+    return renderTable(['File','Functions','Max CC','Avg CC','Rating'], data, function(d) {
+      var r = d.rating||'';
+      var cls = (r==='high'||r==='very-high')?'badge-red':r==='moderate'?'badge-yellow':'badge-green';
+      return [d.file, (d.functions||[]).length, d.maxComplexity||0, Math.round(d.avgComplexity||0), '<span class="badge '+cls+'">'+r+'</span>'];
+    });
+  }
+  if (cmd === 'top') {
+    return renderTable(['Symbol','Kind','File','Imports'], data, function(d) {
+      return [d.symbol||d.id, '<span class="pill">'+esc(d.kind||'')+'</span>', d.file||'', '<span class="badge badge-blue">'+(d.inDegree||d.importCount||0)+'</span>'];
+    });
+  }
+  if (cmd === 'smells') {
+    if (!data.length) return '<div style="color:var(--green)">No smells 🎉</div>';
+    return renderTable(['Smell','Symbol','File','Line','Sev'], data, function(d) {
+      return ['<span class="badge badge-yellow">'+esc(d.smell)+'</span>', d.symbol||'', d.file, d.line||'', d.severity];
+    });
+  }
+  if (cmd === 'security') {
+    if (!data.length) return '<div style="color:var(--green)">No issues 🎉</div>';
+    return renderTable(['Rule','Sev','File','Line','Message'], data, function(d) {
+      var cls = (d.severity==='critical'||d.severity==='high')?'badge-red':'badge-yellow';
+      return ['<span class="badge '+cls+'">'+esc(d.rule)+'</span>', d.severity, d.file, d.line, d.message];
+    });
+  }
+  if (cmd === 'arch') {
+    if (!data.length) return '<div style="color:var(--green)">No violations 🎉</div>';
+    return renderTable(['Rule','From','To','Severity'], data, function(d) {
+      return [d.rule||d.description||'', d.from||'', d.to||'', '<span class="badge '+(d.severity==='error'?'badge-red':'badge-yellow')+'">'+d.severity+'</span>'];
+    });
+  }
+  if (cmd === 'find') {
+    if (!data.length) return '<div style="color:var(--muted)">No symbols found</div>';
+    return renderTable(['Symbol','Kind','File','Line','Exported'], data, function(d) {
+      return [d.name, '<span class="pill">'+esc(d.kind)+'</span>', d.file, d.line||'', d.exported?'✓':''];
+    });
+  }
+  if (cmd === 'impact') {
+    if (!data) return '<div style="color:var(--muted)">Symbol not found in graph</div>';
+    var header = '<div class="card" style="margin-bottom:8px"><b>Direct:</b> '+(data.direct||[]).length+' &nbsp; <b>Transitive:</b> '+(data.transitive||[]).length+' &nbsp; <b>Total files:</b> '+data.totalFiles+'</div>';
+    var allNodes = (data.direct||[]).map(function(n){return Object.assign({},n,{rel:'direct'});}).concat((data.transitive||[]).map(function(n){return Object.assign({},n,{rel:'transitive'});}));
+    return header + renderTable(['File','Symbol','Relation'], allNodes, function(d) {
+      return [d.file, d.symbol||'', '<span class="badge '+(d.rel==='direct'?'badge-blue':'badge-yellow')+'">'+d.rel+'</span>'];
+    });
+  }
+  if (cmd === 'fileDeps') {
+    if (!data) return '<div style="color:var(--muted)">File not found in graph</div>';
+    var imH = (data.imports||[]).map(function(f) { return '<div style="font-family:monospace;font-size:12px;padding:2px 0">'+esc(f.file)+'</div>'; }).join('');
+    var ibH = (data.importedBy||[]).map(function(f) { return '<div style="font-family:monospace;font-size:12px;padding:2px 0">'+esc(f.file)+'</div>'; }).join('');
+    return '<div class="card" style="margin-bottom:8px"><b>Imports:</b> '+(data.imports||[]).length+' &nbsp; <b>Imported by:</b> '+(data.importedBy||[]).length+'</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
+      + '<div><div class="stat-label" style="margin-bottom:6px">Imports</div>'+imH+'</div>'
+      + '<div><div class="stat-label" style="margin-bottom:6px">Imported by</div>'+ibH+'</div></div>';
+  }
+  if (cmd === 'explain') {
+    if (!data) return '<div style="color:var(--muted)">Symbol not found</div>';
+    var detail = JSON.stringify({ signature: data.signature, params: data.params, returnType: data.returnType, exported: data.exported, calls: (data.calls||[]).length, calledBy: (data.calledBy||[]).length }, null, 2);
+    return '<div class="card" style="margin-bottom:8px"><b>'+esc(data.symbol||'')+'</b> <span class="pill">'+esc(data.kind||'')+'</span> in <code style="font-size:11px">'+esc(data.file||'')+'</code></div>'
+      + (data.docstring ? '<div class="card" style="margin-bottom:8px;font-size:12px">'+esc(data.docstring)+'</div>' : '')
+      + '<div class="result-pre">'+esc(detail)+'</div>';
+  }
+  if (cmd === 'diagram') {
+    return '<div class="card" style="margin-bottom:8px"><b>'+esc(data.title||'Diagram')+'</b> — '+data.nodeCount+' nodes, '+data.edgeCount+' edges</div>'
+      + '<div class="result-pre">'+esc(data.mermaid||'')+'</div>';
+  }
+  if (cmd === 'doc') {
+    return '<div class="card" style="margin-bottom:8px"><b>Generated docs</b> — '+data.files+' files, '+data.symbols+' symbols</div>'
+      + '<div class="result-pre">'+esc(data.markdown||'')+'</div>';
+  }
+  return '<div class="result-pre">'+esc(JSON.stringify(data, null, 2))+'</div>';
+}
+
+function renderTable(headers, rows, mapper) {
+  if (!rows || !rows.length) return '<div style="color:var(--muted);font-size:13px;padding:12px">No results</div>';
+  var h = headers.map(function(x) { return '<th>'+x+'</th>'; }).join('');
+  var r = rows.slice(0, 200).map(function(d) {
+    return '<tr>' + mapper(d).map(function(c) { return '<td>'+(c==null?'':c)+'</td>'; }).join('') + '</tr>';
+  }).join('');
+  return '<div class="card"><table><thead><tr>'+h+'</tr></thead><tbody>'+r+'</tbody></table></div>';
+}
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 loadAll();
