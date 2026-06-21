@@ -78,6 +78,20 @@ export function webAppHtml(port: number): string {
   .empty-tabs { display: flex; align-items: center; justify-content: center; height: 200px; color: var(--muted); font-size: 13px; }
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .files-layout { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
+  .detail-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-y: auto; max-height: calc(100vh - 200px); }
+  .detail-sym { font-size: 12px; padding: 4px 0; border-bottom: 1px solid rgba(45,49,66,.4); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+  .filter-select { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--text); font-size: 12px; outline: none; cursor: pointer; }
+  .filter-select:focus { border-color: var(--accent); }
+  .filter-input { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; color: var(--text); font-size: 12px; outline: none; flex: 1; max-width: 260px; }
+  .filter-input:focus { border-color: var(--accent); }
+  .export-btn { padding: 4px 10px; background: transparent; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 11px; cursor: pointer; }
+  .export-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .graph-controls { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
+  .graph-search { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; color: var(--text); font-size: 13px; outline: none; width: 280px; }
+  .graph-search:focus { border-color: var(--accent); }
+  .heatmap-wrap { width: 100%; height: calc(100vh - 180px); }
 </style>
 </head>
 <body>
@@ -90,6 +104,7 @@ export function webAppHtml(port: number): string {
   <div class="nav-item" data-page="files">📁 Files</div>
   <div class="nav-item" data-page="symbols">🔷 Symbols</div>
   <div class="nav-item" data-page="deps">🕸️ Dependency Graph</div>
+  <div class="nav-item" data-page="heatmap">🌡️ Complexity Map</div>
   <div class="nav-section">Issues</div>
   <div class="nav-item" data-page="smells">🤢 Code Smells</div>
   <div class="nav-item" data-page="security">🔒 Security</div>
@@ -122,7 +137,10 @@ export function webAppHtml(port: number): string {
   <div class="page" id="page-files">
     <h1>Files</h1>
     <input class="search" id="file-search" placeholder="Filter files…" oninput="filterFiles()">
-    <div class="card"><table><thead><tr><th>File</th><th>Lang</th><th>Symbols</th><th>Lines</th></tr></thead><tbody id="file-table"></tbody></table></div>
+    <div class="files-layout">
+      <div class="card" style="overflow:auto"><table><thead><tr><th>File</th><th>Lang</th><th>Symbols</th><th>Lines</th></tr></thead><tbody id="file-table"></tbody></table></div>
+      <div class="detail-panel" id="file-detail"><div style="color:var(--muted);font-size:13px;text-align:center;padding:32px 16px">← Click a file to see details</div></div>
+    </div>
   </div>
 
   <!-- SYMBOLS -->
@@ -135,19 +153,30 @@ export function webAppHtml(port: number): string {
   <!-- DEPS GRAPH -->
   <div class="page" id="page-deps">
     <h1>Dependency Graph</h1>
-    <div class="subtitle">File-level import relationships — drag to explore</div>
+    <div class="graph-controls">
+      <input class="graph-search" id="graph-search" placeholder="Filter nodes by name…" oninput="filterGraph()">
+      <span style="color:var(--muted);font-size:12px">scroll to zoom · drag to pan · hover to highlight</span>
+    </div>
     <svg id="graph-canvas"></svg>
   </div>
 
   <!-- SMELLS -->
   <div class="page" id="page-smells">
     <h1>Code Smells</h1>
+    <div class="filter-bar">
+      <select class="filter-select" id="smell-sev" onchange="renderSmells()"><option value="">All severities</option><option value="error">Error</option><option value="warning">Warning</option><option value="info">Info</option></select>
+      <input class="filter-input" id="smell-file" placeholder="Filter by file…" oninput="renderSmells()">
+    </div>
     <div id="smells-content"></div>
   </div>
 
   <!-- SECURITY -->
   <div class="page" id="page-security">
     <h1>Security Issues</h1>
+    <div class="filter-bar">
+      <select class="filter-select" id="sec-sev" onchange="renderSecurity()"><option value="">All severities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+      <input class="filter-input" id="sec-file" placeholder="Filter by file…" oninput="renderSecurity()">
+    </div>
     <div id="security-content"></div>
   </div>
 
@@ -156,6 +185,13 @@ export function webAppHtml(port: number): string {
     <h1>Dead Exports</h1>
     <div class="subtitle">Exported symbols with no known importers inside the scanned directory</div>
     <div class="card"><table><thead><tr><th>Symbol</th><th>Kind</th><th>File</th><th>Confidence</th></tr></thead><tbody id="dead-table"></tbody></table></div>
+  </div>
+
+  <!-- COMPLEXITY MAP -->
+  <div class="page" id="page-heatmap">
+    <h1>Complexity Map</h1>
+    <div class="subtitle">Size = lines of code · Color = code smells density (green → red) · hover for details</div>
+    <div class="heatmap-wrap" id="heatmap-wrap"></div>
   </div>
 
   <!-- RUN COMMANDS -->
@@ -179,6 +215,8 @@ export function webAppHtml(port: number): string {
 <script>
 const API = 'http://localhost:${port}/api';
 let state = { report: null, graph: null, dead: [], history: [], skeletons: [], smells: [], security: [] };
+var _graphNodeG = null, _graphLinkG = null, _graphFilterQ = '';
+var _tabData = {};
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-item').forEach(el => {
@@ -222,6 +260,7 @@ function renderPage(name) {
   else if (name === 'security') renderSecurity();
   else if (name === 'dead') renderDead();
   else if (name === 'run') renderRun();
+  else if (name === 'heatmap') renderHeatmap();
 }
 
 function grade(s) { return s >= 90 ? 'A' : s >= 80 ? 'B' : s >= 70 ? 'C' : s >= 60 ? 'D' : 'F'; }
@@ -285,8 +324,37 @@ function filterFiles() {
   const q = document.getElementById('file-search')?.value?.toLowerCase() ?? '';
   const rows = allFiles.filter(s => !q || s.file.toLowerCase().includes(q));
   document.getElementById('file-table').innerHTML = rows.map(s =>
-    \`<tr><td style="font-family:monospace">\${s.file}</td><td><span class="pill">\${s.language}</span></td><td>\${s.symbolCount ?? s.symbols?.length ?? 0}</td><td>\${s.lineCount ?? '?'}</td></tr>\`
+    \`<tr class="file-row" data-file="\${esc(s.file)}" style="cursor:pointer"><td style="font-family:monospace;font-size:12px">\${esc(s.file)}</td><td><span class="pill">\${s.language}</span></td><td>\${s.symbolCount ?? s.symbols?.length ?? 0}</td><td>\${s.lineCount ?? '?'}</td></tr>\`
   ).join('');
+  document.getElementById('file-table').querySelectorAll('.file-row').forEach(function(tr) {
+    tr.addEventListener('click', function() { showFileDetail(tr.dataset.file); });
+  });
+}
+function showFileDetail(file) {
+  var skel = state.skeletons.find(function(s) { return s.file === file; });
+  if (!skel) return;
+  var smells = state.smells.filter(function(s) { return s.file === file; });
+  var syms = flattenSyms(skel.symbols ?? [], file);
+  var html = '<div style="font-size:13px;font-weight:600;margin-bottom:10px;word-break:break-all">' + esc(file) + '</div>';
+  html += '<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+  html += '<span class="badge badge-blue">' + esc(skel.language) + '</span>';
+  html += '<span class="pill">' + syms.length + ' symbols</span>';
+  html += '<span class="pill">' + (skel.lineCount ?? '?') + ' lines</span>';
+  if (smells.length) html += '<span class="badge badge-yellow">' + smells.length + ' smells</span>';
+  html += '</div>';
+  if (syms.length) {
+    html += '<div class="stat-label" style="margin-bottom:6px">Symbols</div>';
+    syms.slice(0, 60).forEach(function(s) {
+      html += '<div class="detail-sym"><span><b>' + esc(s.name) + '</b></span><span class="pill">' + esc(s.kind) + '</span></div>';
+    });
+  }
+  if (smells.length) {
+    html += '<div class="stat-label" style="margin-top:14px;margin-bottom:6px">Smells</div>';
+    smells.forEach(function(s) {
+      html += '<div class="detail-sym"><span class="badge badge-yellow">' + esc(s.smell) + '</span><span style="color:var(--muted);font-size:11px">line ' + (s.line ?? '?') + '</span></div>';
+    });
+  }
+  document.getElementById('file-detail').innerHTML = html;
 }
 
 let allSymbols = [];
@@ -368,13 +436,27 @@ function renderGraph() {
     .attr('dy', d => 7 + Math.round((degree[d.id]||0) / maxDeg * 10) + 13)
     .attr('pointer-events', 'none');
 
+  _graphNodeG = nodeG;
+  _graphLinkG = linkG;
+  applyGraphFilter();
+
   nodeG
     .on('mouseover', (ev, d) => {
+      const connected = new Set([d.id]);
+      links.forEach(l => {
+        if (l.source.id === d.id) connected.add(l.target.id);
+        if (l.target.id === d.id) connected.add(l.source.id);
+      });
+      nodeG.attr('opacity', n => connected.has(n.id) ? 1 : 0.1);
+      linkG.attr('stroke-opacity', l => (l.source.id === d.id || l.target.id === d.id) ? 0.9 : 0.04);
       const t = document.getElementById('tooltip');
       t.style.display = 'block'; t.style.left = ev.clientX + 14 + 'px'; t.style.top = ev.clientY + 'px';
       t.innerHTML = \`<b>\${d.id}</b><br><span style="color:var(--muted)">connections: \${degree[d.id]||0}</span>\`;
     })
-    .on('mouseout', () => { document.getElementById('tooltip').style.display = 'none'; });
+    .on('mouseout', () => {
+      applyGraphFilter();
+      document.getElementById('tooltip').style.display = 'none';
+    });
 
   sim.on('tick', () => {
     linkG.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
@@ -384,7 +466,11 @@ function renderGraph() {
 }
 
 function renderSmells() {
-  const s = state.smells;
+  const sev = document.getElementById('smell-sev')?.value ?? '';
+  const fileQ = document.getElementById('smell-file')?.value?.toLowerCase() ?? '';
+  const s = state.smells.filter(i =>
+    (!sev || i.severity === sev) && (!fileQ || i.file.toLowerCase().includes(fileQ))
+  );
   document.getElementById('smells-content').innerHTML = s.length === 0
     ? '<div class="card" style="color:var(--green)">No smells detected 🎉</div>'
     : \`<div class="card"><table><thead><tr><th>Smell</th><th>Symbol</th><th>File</th><th>Line</th><th>Severity</th></tr></thead><tbody>\${s.map(i =>
@@ -393,7 +479,11 @@ function renderSmells() {
 }
 
 function renderSecurity() {
-  const s = state.security;
+  const sev = document.getElementById('sec-sev')?.value ?? '';
+  const fileQ = document.getElementById('sec-file')?.value?.toLowerCase() ?? '';
+  const s = state.security.filter(i =>
+    (!sev || i.severity === sev) && (!fileQ || i.file.toLowerCase().includes(fileQ))
+  );
   document.getElementById('security-content').innerHTML = s.length === 0
     ? '<div class="card" style="color:var(--green)">No security issues detected 🎉</div>'
     : \`<div class="card"><table><thead><tr><th>Rule</th><th>Severity</th><th>File</th><th>Line</th><th>Message</th></tr></thead><tbody>\${s.map(i =>
@@ -523,6 +613,7 @@ async function runCmd(id) {
     });
     var json = await r.json();
     if (!r.ok) throw new Error(json.error || r.statusText);
+    _tabData[tabId] = { cmd: id, data: json.data };
     setTabContent(tabId, renderResult(id, json.data));
   } catch(e) {
     setTabContent(tabId, '<div class="error-box">' + esc(e.message) + '</div>');
@@ -551,7 +642,12 @@ function addTab(id, label, content) {
 
 function setTabContent(id, html) {
   var pane = document.getElementById('pane-' + id);
-  if (pane) pane.innerHTML = html;
+  if (!pane) return;
+  var exportRow = _tabData[id] ? '<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="export-btn" data-export="' + id + '">⬇ JSON</button></div>' : '';
+  pane.innerHTML = exportRow + html;
+  if (_tabData[id]) {
+    pane.querySelector('[data-export]').addEventListener('click', function() { exportTab(id); });
+  }
 }
 
 function switchTab(id) {
@@ -566,6 +662,7 @@ function closeTab(id, e) {
   var wasActive = tab && tab.classList.contains('active');
   if (tab) tab.remove();
   if (pane) pane.remove();
+  delete _tabData[id];
   if (wasActive) {
     var remaining = document.querySelectorAll('.tab');
     if (remaining.length > 0) {
@@ -680,6 +777,74 @@ function renderTable(headers, rows, mapper) {
     return '<tr>' + mapper(d).map(function(c) { return '<td>'+(c==null?'':c)+'</td>'; }).join('') + '</tr>';
   }).join('');
   return '<div class="card"><table><thead><tr>'+h+'</tr></thead><tbody>'+r+'</tbody></table></div>';
+}
+
+// ─── Graph filter ─────────────────────────────────────────────────────────────
+function filterGraph() {
+  _graphFilterQ = document.getElementById('graph-search')?.value?.toLowerCase() ?? '';
+  applyGraphFilter();
+}
+function applyGraphFilter() {
+  if (!_graphNodeG) return;
+  if (!_graphFilterQ) {
+    _graphNodeG.attr('opacity', 1);
+    _graphLinkG.attr('stroke-opacity', 0.45);
+    return;
+  }
+  _graphNodeG.attr('opacity', function(d) { return d.id.toLowerCase().includes(_graphFilterQ) ? 1 : 0.07; });
+  _graphLinkG.attr('stroke-opacity', function(l) {
+    return (l.source.id.toLowerCase().includes(_graphFilterQ) || l.target.id.toLowerCase().includes(_graphFilterQ)) ? 0.65 : 0.04;
+  });
+}
+
+// ─── Complexity heatmap ───────────────────────────────────────────────────────
+function renderHeatmap() {
+  var wrap = document.getElementById('heatmap-wrap');
+  var data = state.skeletons;
+  if (!data.length) { wrap.innerHTML = '<div class="loading">No file data — load a project first</div>'; return; }
+  var smellsMap = {};
+  state.smells.forEach(function(s) { smellsMap[s.file] = (smellsMap[s.file]||0) + 1; });
+  var W = wrap.clientWidth || 900, H = wrap.clientHeight || 500;
+  var root = d3.hierarchy({ children: data })
+    .sum(function(d) { return Math.max(1, d.lineCount || (d.symbols ? d.symbols.length * 8 : 10)); })
+    .sort(function(a, b) { return b.value - a.value; });
+  d3.treemap().size([W, H]).padding(2).round(true)(root);
+  var maxSmells = Math.max(1, d3.max(data, function(d) { return smellsMap[d.file] || 0; }));
+  var color = d3.scaleLinear().domain([0, maxSmells * 0.5, maxSmells]).range(['#166534', '#ca8a04', '#b91c1c']);
+  wrap.innerHTML = '';
+  var svg = d3.select('#heatmap-wrap').append('svg').attr('width', W).attr('height', H);
+  var cell = svg.selectAll('g').data(root.leaves()).join('g')
+    .attr('transform', function(d) { return 'translate(' + d.x0 + ',' + d.y0 + ')'; });
+  cell.append('rect')
+    .attr('width', function(d) { return Math.max(0, d.x1 - d.x0); })
+    .attr('height', function(d) { return Math.max(0, d.y1 - d.y0); })
+    .attr('fill', function(d) { return color(smellsMap[d.data.file] || 0); })
+    .attr('fill-opacity', 0.82).attr('stroke', '#0f1117').attr('stroke-width', 1).attr('rx', 3);
+  cell.filter(function(d) { return (d.x1 - d.x0) > 55 && (d.y1 - d.y0) > 18; })
+    .append('text').attr('x', 5).attr('y', 14)
+    .attr('font-size', '11px').attr('fill', '#f1f5f9').attr('fill-opacity', 0.9).attr('pointer-events', 'none')
+    .text(function(d) { return d.data.file.split('/').pop(); });
+  cell.filter(function(d) { return (d.x1 - d.x0) > 55 && (d.y1 - d.y0) > 30; })
+    .append('text').attr('x', 5).attr('y', 27)
+    .attr('font-size', '10px').attr('fill', '#cbd5e1').attr('fill-opacity', 0.7).attr('pointer-events', 'none')
+    .text(function(d) { return (d.data.lineCount || '?') + 'L' + (smellsMap[d.data.file] ? ' · ' + smellsMap[d.data.file] + ' smells' : ''); });
+  cell.on('mouseover', function(ev, d) {
+    var t = document.getElementById('tooltip');
+    t.style.display = 'block'; t.style.left = ev.clientX + 14 + 'px'; t.style.top = ev.clientY + 'px';
+    t.innerHTML = '<b>' + esc(d.data.file) + '</b><br>' + (d.data.lineCount||'?') + ' lines · ' + (d.data.symbols ? d.data.symbols.length : '?') + ' symbols · ' + (smellsMap[d.data.file]||0) + ' smells';
+  }).on('mouseout', function() { document.getElementById('tooltip').style.display = 'none'; });
+}
+
+// ─── Export tab data ──────────────────────────────────────────────────────────
+function exportTab(id) {
+  var d = _tabData[id];
+  if (!d) return;
+  var blob = new Blob([JSON.stringify(d.data, null, 2)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = d.cmd + '-export.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
