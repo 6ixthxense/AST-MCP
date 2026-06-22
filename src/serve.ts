@@ -7,7 +7,6 @@ import { buildSymbolGraph } from "./graph.js";
 import { findDeadExports, findCircularDeps, getTopSymbols } from "./graph-analysis.js";
 import { buildReport } from "./report.js";
 import { loadHistory } from "./history.js";
-import { detectSmells } from "./smells.js";
 import { scanFileForSecurityIssues } from "./security.js";
 import { buildSkeletonsBulk } from "./pool.js";
 import type { SkeletonFile } from "./types.js";
@@ -20,6 +19,8 @@ import { buildClassDiagram, buildDepsDiagram, buildModulesDiagram } from "./diag
 import { buildDocOutput, renderMarkdown } from "./docgen.js";
 import { buildExplainResult } from "./explain.js";
 import { searchSymbols } from "./search.js";
+import { computeDiff, isGitRepo } from "./gitdiff.js";
+import { detectSmells, type SmellResult } from "./smells.js";
 
 export interface ServeOptions {
   port?: number;
@@ -28,6 +29,20 @@ export interface ServeOptions {
   open?: boolean;
   /** Enable fs.watch and push SSE events to connected clients. */
   watch?: boolean;
+}
+
+// Per-session analysis cache (mtime-invalidated)
+const _ac = new Map<string, { mtime: number; result: unknown }>();
+function acGet<T>(k: string): T | null {
+  const e = _ac.get(k);
+  if (!e) return null;
+  try {
+    if (fs.statSync(k.split("\0")[0]).mtimeMs !== e.mtime) { _ac.delete(k); return null; }
+    return e.result as T;
+  } catch { return null; }
+}
+function acPut(fileAbs: string, type: string, result: unknown): void {
+  try { _ac.set(fileAbs + "\0" + type, { mtime: fs.statSync(fileAbs).mtimeMs, result }); } catch { /* skip */ }
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -237,11 +252,16 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
             data = findSimilar(skeletons, { minGroupSize: (args.minGroupSize as number) ?? 2 });
             break;
           case "smells": {
-            const all: ReturnType<typeof detectSmells> = [];
+            const all: SmellResult[] = [];
             for (const skel of skeletons) {
+              const fileAbs = path.resolve(root, skel.file);
               try {
-                const src = fs.readFileSync(path.resolve(root, skel.file), "utf8");
-                all.push(...detectSmells(skel, src.split("\n").length));
+                const cached = acGet<SmellResult[]>(fileAbs + "\0smells");
+                if (cached) { all.push(...cached); continue; }
+                const src = fs.readFileSync(fileAbs, "utf8");
+                const s = detectSmells(skel, src.split("\n").length);
+                acPut(fileAbs, "smells", s);
+                all.push(...s);
               } catch { /* skip */ }
             }
             data = all;
@@ -250,9 +270,14 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
           case "security": {
             const all: ReturnType<typeof scanFileForSecurityIssues> = [];
             for (const skel of skeletons) {
+              const fileAbs = path.resolve(root, skel.file);
               try {
-                const src = fs.readFileSync(path.resolve(root, skel.file), "utf8");
-                all.push(...scanFileForSecurityIssues(src, skel.file));
+                const cached = acGet<ReturnType<typeof scanFileForSecurityIssues>>(fileAbs + "\0security");
+                if (cached) { all.push(...cached); continue; }
+                const src = fs.readFileSync(fileAbs, "utf8");
+                const issues = scanFileForSecurityIssues(src, skel.file);
+                acPut(fileAbs, "security", issues);
+                all.push(...issues);
               } catch { /* skip */ }
             }
             data = all;
@@ -316,6 +341,49 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
               markdown: renderMarkdown(docOut),
               files: docOut.files.length,
               symbols: docOut.files.reduce((a: number, f) => a + f.symbols.length, 0),
+            };
+            break;
+          }
+          case "pr_diff": {
+            if (!isGitRepo(root)) throw new Error("Not a git repository.");
+            const baseRef = (args.base as string) ?? "main";
+            const diff = await computeDiff(scanDir, root, baseRef);
+            const smellsOptsPR = resolveOptions({ detail: "full", emitHtml: false });
+            const pSmells: SmellResult[] = [];
+            const pSec: ReturnType<typeof scanFileForSecurityIssues> = [];
+            for (const fd of diff.files) {
+              if (fd.status === "deleted") continue;
+              const fileAbs = path.resolve(root, fd.file);
+              try {
+                const cached = acGet<SmellResult[]>(fileAbs + "\0smells");
+                if (cached) { pSmells.push(...cached); }
+                else {
+                  const skel = await buildSkeleton(fileAbs, fd.file, smellsOptsPR);
+                  const lc = fs.readFileSync(fileAbs, "utf8").split("\n").length;
+                  const s = detectSmells(skel, lc, {});
+                  acPut(fileAbs, "smells", s);
+                  pSmells.push(...s);
+                }
+              } catch { /* skip */ }
+              try {
+                const cachedSec = acGet<ReturnType<typeof scanFileForSecurityIssues>>(fileAbs + "\0security");
+                if (cachedSec) { pSec.push(...cachedSec); }
+                else {
+                  const src = fs.readFileSync(fileAbs, "utf8");
+                  const issues = scanFileForSecurityIssues(src, fd.file);
+                  acPut(fileAbs, "security", issues);
+                  pSec.push(...issues);
+                }
+              } catch { /* skip */ }
+            }
+            data = {
+              base: baseRef,
+              summary: { ...diff.summary, smells: pSmells.length, securityIssues: pSec.length },
+              breaking: diff.breaking,
+              impactedFiles: diff.impactedFiles,
+              files: diff.files,
+              smells: pSmells.slice(0, 50),
+              security: pSec.slice(0, 50),
             };
             break;
           }

@@ -128,6 +128,24 @@ function pruneSkeletonFile(skel: SkeletonFile): Record<string, unknown> {
   return out;
 }
 
+// In-process analysis result cache: avoids re-scanning unchanged files within a session.
+// Key: fileAbsPath + '\0' + analysisType. Invalidated by mtime.
+const _analysisCache = new Map<string, { mtime: number; result: unknown }>();
+
+function _acGet<T>(fileAbs: string, type: string): T | null {
+  const k = fileAbs + "\0" + type;
+  const e = _analysisCache.get(k);
+  if (!e) return null;
+  try {
+    if (fs.statSync(fileAbs).mtimeMs !== e.mtime) { _analysisCache.delete(k); return null; }
+    return e.result as T;
+  } catch { return null; }
+}
+
+function _acPut(fileAbs: string, type: string, result: unknown): void {
+  try { _analysisCache.set(fileAbs + "\0" + type, { mtime: fs.statSync(fileAbs).mtimeMs, result }); } catch { /* skip */ }
+}
+
 function errorText(message: string) {
   return {
     isError: true as const,
@@ -1628,9 +1646,13 @@ server.registerTool(
       for (const fileAbs of filesToScan) {
         const fileRel = path.relative(root, fileAbs).split(path.sep).join("/");
         try {
+          const cached = _acGet<SmellResult[]>(fileAbs, "smells");
+          if (cached) { allSmells.push(...cached); continue; }
           const skel = await buildSkeleton(fileAbs, fileRel, opts);
           const lineCount = fs.readFileSync(fileAbs, "utf8").split("\n").length;
-          allSmells.push(...detectSmells(skel, lineCount, smellOpts));
+          const fileSmells = detectSmells(skel, lineCount, smellOpts);
+          _acPut(fileAbs, "smells", fileSmells);
+          allSmells.push(...fileSmells);
         } catch { /* skip */ }
       }
       const cap = limit === 0 ? allSmells.length : (limit ?? 100);
@@ -1673,8 +1695,14 @@ server.registerTool(
       for (const fileAbs of filesToScan) {
         const fileRel = path.relative(root, fileAbs).split(path.sep).join("/");
         try {
-          const source = fs.readFileSync(fileAbs, "utf8");
-          const issues = scanFileForSecurityIssues(source, fileRel);
+          type IssueList = ReturnType<typeof scanFileForSecurityIssues>;
+          const cached = _acGet<IssueList>(fileAbs, "security");
+          const issues = cached ?? (() => {
+            const src = fs.readFileSync(fileAbs, "utf8");
+            const r = scanFileForSecurityIssues(src, fileRel);
+            _acPut(fileAbs, "security", r);
+            return r;
+          })();
           allIssues.push(...issues.filter((i) => order.indexOf(i.severity as (typeof order)[number]) <= minIdx));
         } catch { /* skip */ }
       }
@@ -1682,6 +1710,87 @@ server.registerTool(
       const issues = allIssues.slice(0, cap);
       return jsonText({ path: rel, scanned: filesToScan.length, total: allIssues.length, ...(allIssues.length > cap ? { truncated: true, showing: cap } : {}), issues });
     } catch (err) { return errorText(describeError(err)); }
+  },
+);
+
+/* ─────────────────── tool: analyze_pr_diff ────────────────────────────── */
+server.registerTool(
+  "analyze_pr_diff",
+  {
+    title: "Analyze PR diff vs base branch",
+    description:
+      "Compare the working tree against a base git ref and return a comprehensive diff report:\n" +
+      "  • Per-file symbol changes (added/removed/modified exports, signature changes)\n" +
+      "  • Breaking changes — removed/renamed exported symbols with blast-radius impact\n" +
+      "  • Code smells and security issues found only in changed files\n" +
+      "  • Summary counts for quick CI integration\n\n" +
+      "Requires the path to be inside a git repository. Use base='HEAD~1' to compare the last commit, " +
+      "or base='main' (default) to compare the current branch against main.",
+    inputSchema: {
+      path: z.string().describe("Directory to scan, relative to project root or absolute within it."),
+      base: z.string().optional().describe("Base git ref to diff against (default: main)."),
+    },
+  },
+  async ({ path: input, base }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText("analyze_pr_diff requires a directory.");
+      }
+      if (!isGitRepo(root)) {
+        return errorText("Not a git repository. analyze_pr_diff requires git.");
+      }
+
+      const baseRef = base ?? "main";
+      const diff = await computeDiff(abs, root, baseRef);
+
+      const smellsOpts = resolveOptions({ detail: "full", emitHtml: false });
+      const changedSmells: SmellResult[] = [];
+      const changedSecurity: ReturnType<typeof scanFileForSecurityIssues> = [];
+
+      for (const fd of diff.files) {
+        if (fd.status === "deleted") continue;
+        const fileAbs = path.resolve(root, fd.file);
+        try {
+          const cached = _acGet<SmellResult[]>(fileAbs, "smells");
+          if (cached) { changedSmells.push(...cached); }
+          else {
+            const skel = await buildSkeleton(fileAbs, fd.file, smellsOpts);
+            const lineCount = fs.readFileSync(fileAbs, "utf8").split("\n").length;
+            const s = detectSmells(skel, lineCount, {});
+            _acPut(fileAbs, "smells", s);
+            changedSmells.push(...s);
+          }
+        } catch { /* skip */ }
+        try {
+          type IssueList = ReturnType<typeof scanFileForSecurityIssues>;
+          const cachedSec = _acGet<IssueList>(fileAbs, "security");
+          if (cachedSec) { changedSecurity.push(...cachedSec); }
+          else {
+            const src = fs.readFileSync(fileAbs, "utf8");
+            const issues = scanFileForSecurityIssues(src, fd.file);
+            _acPut(fileAbs, "security", issues);
+            changedSecurity.push(...issues);
+          }
+        } catch { /* skip */ }
+      }
+
+      return jsonText({
+        base: baseRef,
+        summary: {
+          ...diff.summary,
+          smells: changedSmells.length,
+          securityIssues: changedSecurity.length,
+        },
+        breaking: diff.breaking,
+        impactedFiles: diff.impactedFiles,
+        files: diff.files,
+        smells: changedSmells.slice(0, 50),
+        security: changedSecurity.slice(0, 50),
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
   },
 );
 

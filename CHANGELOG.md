@@ -6,6 +6,15 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.7] — 2026-06-22 · patch
+
+- **feat:** new MCP tool `analyze_pr_diff` — diffs working tree vs a base git ref, returns per-file symbol changes (added/removed/modified), breaking exports with blast-radius, smells + security on changed files only
+- **feat:** web UI — new "🔀 PR Diff Analysis" command in Run Commands (Git / PR group); results rendered as summary cards + tables (changed files, breaking changes, smells, security issues)
+- **feat:** web UI — cancel button on in-flight Run Commands tabs (AbortController on fetch; closes tab immediately on click)
+- **perf:** in-process mtime-invalidated analysis cache for `detect_code_smells` and `scan_security` — repeated calls on unchanged files return cached results instantly; also applied to serve.ts web session
+
+---
+
 ## [2.0.6] — 2026-06-21 · patch
 
 - **perf:** switch all MCP tool responses to compact JSON (no indent) — ~20% token reduction on every call
