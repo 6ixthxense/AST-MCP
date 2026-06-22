@@ -709,6 +709,59 @@ server.registerTool(
   },
 );
 
+/* ─────────────────── tool: find_orphan_types ───────────────────────────── */
+server.registerTool(
+  "find_orphan_types",
+  {
+    title: "Find orphan types and interfaces",
+    description:
+      "Scan a directory and return exported `type` and `interface` declarations that are never " +
+      "imported by any other file in the scan root. These are candidates for cleanup or documentation.\n\n" +
+      "Unlike dead functions/classes (high-confidence removals), orphan types may still be used as " +
+      "structural contracts or re-exported — review before deleting.",
+    inputSchema: {
+      path: z.string().describe("Directory to scan, relative to project root or absolute within it."),
+      limit: z
+        .number()
+        .int()
+        .optional()
+        .describe("Max orphan types to return (default 100). Use 0 for all."),
+    },
+  },
+  async ({ path: input, limit }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText("find_orphan_types requires a directory.");
+      }
+
+      const opts = resolveOptions({ detail: "outline", emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const skeletons: SkeletonFile[] = [];
+      for (const file of files) {
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
+      }
+
+      const graph = buildSymbolGraph(skeletons, root);
+      const allDead = findDeadExports(graph);
+      const maxResults = (limit ?? 100) === 0 ? Infinity : (limit ?? 100);
+      const orphans = allDead
+        .filter(d => d.kind === "type" || d.kind === "interface")
+        .slice(0, maxResults === Infinity ? undefined : maxResults);
+
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        orphanCount: orphans.length,
+        orphans,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
 /* ─────────────────── tool: find_dead_code ──────────────────────────────── */
 server.registerTool(
   "find_dead_code",

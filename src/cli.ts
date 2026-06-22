@@ -474,6 +474,36 @@ program
     console.log();
   });
 
+// ─── Command: orphan-types ────────────────────────────────────────────────────
+
+program
+  .command("orphan-types [dir]")
+  .description("Find exported type/interface declarations never imported within the directory")
+  .option("--json", "Output as JSON")
+  .action(async (inputPath: string | undefined, opts: { json?: boolean }) => {
+    const { abs, rel } = resolveArg(inputPath ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+
+    const skeletons = await gatherSkeletons(abs);
+    const graph = buildSymbolGraph(skeletons, ROOT);
+    const dead = findDeadExports(graph);
+    const orphans = dead.filter(d => d.kind === "type" || d.kind === "interface");
+
+    if (opts.json) return jsonOut({ directory: rel, scanned: skeletons.length, orphanCount: orphans.length, orphans });
+
+    header(`Orphan Types — ${rel}/  ${dim(`(${skeletons.length} files scanned)`)}`);
+    if (orphans.length === 0) {
+      console.log(indent(green("✓ No orphan types found.")));
+    } else {
+      table(
+        orphans.map(d => [d.file, d.symbol, d.kind]),
+        [["File", 44], ["Symbol", 28], ["Kind", 12]],
+      );
+      console.log(`\n  ${yellow(`${orphans.length} orphan type(s)`)}  ${dim("(may still be used as structural contracts — review before removing)")}`);
+    }
+    console.log();
+  });
+
 // ─── Command: watch ───────────────────────────────────────────────────────────
 
 program
@@ -1617,7 +1647,8 @@ program
   .option("--max-params <n>", "Long-param-list threshold: parameters per function", (v) => parseInt(v, 10), 4)
   .option("--changed-since <ref>", "Only scan files changed since this git ref (e.g. HEAD, main)")
   .option("--json", "Output as JSON")
-  .action(async (inputPath: string | undefined, opts: { maxMethods: number; maxFields: number; maxLines: number; maxParams: number; changedSince?: string; json?: boolean }) => {
+  .option("--format <fmt>", "Output format: pretty (default) | gha (GitHub Actions annotations)")
+  .action(async (inputPath: string | undefined, opts: { maxMethods: number; maxFields: number; maxLines: number; maxParams: number; changedSince?: string; json?: boolean; format?: string }) => {
     const { abs, rel } = resolveArg(inputPath ?? ".");
     const stat = fs.statSync(abs);
     const skOpts = resolveOptions({ detail: "full", emitHtml: false });
@@ -1641,6 +1672,15 @@ program
     }
 
     if (opts.json) return jsonOut({ scanned: filesToScan.length, smellCount: allSmells.length, smells: allSmells });
+
+    if (opts.format === "gha") {
+      for (const s of allSmells) {
+        const level = s.severity === "warning" ? "warning" : "notice";
+        const loc = s.line ? `,line=${s.line}` : "";
+        process.stdout.write(`::${level} file=${s.file}${loc}::[${s.smell}] ${s.message}\n`);
+      }
+      return;
+    }
 
     const warnings = allSmells.filter((s) => s.severity === "warning");
     const infos = allSmells.filter((s) => s.severity === "info");
@@ -1674,7 +1714,8 @@ program
   .option("--json", "Output as JSON")
   .option("-s, --severity <level>", "Minimum severity: critical|high|medium|low", "low")
   .option("--changed-since <ref>", "Only scan files changed since this git ref (e.g. HEAD, main)")
-  .action(async (inputPath: string | undefined, opts: { json?: boolean; severity: string; changedSince?: string }) => {
+  .option("--format <fmt>", "Output format: pretty (default) | gha (GitHub Actions annotations)")
+  .action(async (inputPath: string | undefined, opts: { json?: boolean; severity: string; changedSince?: string; format?: string }) => {
     const { abs, rel } = resolveArg(inputPath ?? ".");
     const stat = fs.statSync(abs);
     const skOpts = resolveOptions({ detail: "outline", emitHtml: false });
@@ -1698,6 +1739,14 @@ program
     }
 
     if (opts.json) return jsonOut({ scanned: filesToScan.length, issueCount: allIssues.length, issues: allIssues });
+
+    if (opts.format === "gha") {
+      for (const issue of allIssues) {
+        const level = issue.severity === "critical" || issue.severity === "high" ? "error" : issue.severity === "medium" ? "warning" : "notice";
+        process.stdout.write(`::${level} file=${issue.file},line=${issue.line}::[${issue.rule}] ${issue.snippet.slice(0, 120)}\n`);
+      }
+      return;
+    }
 
     const bySev = { critical: allIssues.filter(i => i.severity === "critical"), high: allIssues.filter(i => i.severity === "high"), medium: allIssues.filter(i => i.severity === "medium"), low: allIssues.filter(i => i.severity === "low") };
     const sevColor = (s: string) => s === "critical" || s === "high" ? red : s === "medium" ? yellow : dim;
