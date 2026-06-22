@@ -45,7 +45,12 @@ export function webAppHtml(port: number): string {
   tr:hover td { background: rgba(124,58,237,.05); }
   .search { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; color: var(--text); font-size: 13px; margin-bottom: 16px; outline: none; }
   .search:focus { border-color: var(--accent); }
-  #graph-canvas { width: 100%; height: calc(100vh - 140px); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  #graph-canvas { width: 100%; height: calc(100vh - 180px); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+  .graph-layout { display: grid; grid-template-columns: 1fr 280px; gap: 12px; align-items: start; }
+  .graph-node-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; height: calc(100vh - 180px); overflow-y: auto; font-size: 12px; }
+  .graph-node-detail .gnd-title { font-size: 13px; font-weight: 600; word-break: break-all; margin-bottom: 10px; color: var(--accent); }
+  .graph-node-detail .gnd-section { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 10px 0 4px; }
+  .graph-node-detail .gnd-row { padding: 2px 0; font-family: monospace; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tooltip { position: fixed; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 12px; pointer-events: none; z-index: 9999; max-width: 260px; display: none; }
   .sparkline { display: inline-block; width: 80px; height: 24px; vertical-align: middle; }
   .refresh-btn { margin-left: auto; padding: 6px 14px; background: var(--accent); border: none; border-radius: 6px; color: #fff; font-size: 12px; cursor: pointer; }
@@ -157,9 +162,14 @@ export function webAppHtml(port: number): string {
     <h1>Dependency Graph</h1>
     <div class="graph-controls">
       <input class="graph-search" id="graph-search" placeholder="Filter nodes by name…" oninput="filterGraph()">
-      <span style="color:var(--muted);font-size:12px">scroll to zoom · drag to pan · hover to highlight</span>
+      <span style="color:var(--muted);font-size:12px">scroll to zoom · drag to pan · hover to highlight · <b>click</b> to inspect</span>
     </div>
-    <svg id="graph-canvas"></svg>
+    <div class="graph-layout">
+      <svg id="graph-canvas"></svg>
+      <div class="graph-node-detail" id="graph-node-detail">
+        <div style="color:var(--muted);text-align:center;padding:32px 8px;font-size:12px">← Click a node to inspect</div>
+      </div>
+    </div>
   </div>
 
   <!-- SMELLS -->
@@ -443,6 +453,10 @@ function renderGraph() {
   applyGraphFilter();
 
   nodeG
+    .on('click', (ev, d) => {
+      ev.stopPropagation();
+      showGraphDetail(d, degree, links);
+    })
     .on('mouseover', (ev, d) => {
       const connected = new Set([d.id]);
       links.forEach(l => {
@@ -465,6 +479,48 @@ function renderGraph() {
          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
     nodeG.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
   });
+}
+
+function showGraphDetail(d, degree, links) {
+  const panel = document.getElementById('graph-node-detail');
+  if (!panel) return;
+  const imports = links.filter(l => (l.source.id||l.source) === d.id).map(l => l.target.id||l.target);
+  const importedBy = links.filter(l => (l.target.id||l.target) === d.id).map(l => l.source.id||l.source);
+  const skel = state.skeletons.find(s => s.file === d.id);
+  const smells = state.smells.filter(s => s.file === d.id);
+  const syms = skel ? flattenSyms(skel.symbols ?? [], d.id) : [];
+
+  let html = \`<div class="gnd-title">\${esc(d.id.split('/').pop())}</div>\`;
+  html += \`<div style="font-family:monospace;font-size:10px;color:var(--muted);margin-bottom:8px;word-break:break-all">\${esc(d.id)}</div>\`;
+  html += \`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">\`;
+  if (skel) html += \`<span class="badge badge-blue">\${esc(skel.language)}</span>\`;
+  html += \`<span class="pill">\${degree[d.id]||0} connections</span>\`;
+  html += \`<span class="pill">\${syms.length} symbols</span>\`;
+  if (smells.length) html += \`<span class="badge badge-yellow">\${smells.length} smells</span>\`;
+  html += '</div>';
+
+  if (imports.length) {
+    html += \`<div class="gnd-section">Imports (\${imports.length})</div>\`;
+    imports.slice(0, 10).forEach(f => { html += \`<div class="gnd-row" title="\${esc(f)}">\${esc(f.split('/').pop())}</div>\`; });
+    if (imports.length > 10) html += \`<div style="color:var(--muted);font-size:10px">+\${imports.length - 10} more</div>\`;
+  }
+  if (importedBy.length) {
+    html += \`<div class="gnd-section">Imported by (\${importedBy.length})</div>\`;
+    importedBy.slice(0, 10).forEach(f => { html += \`<div class="gnd-row" title="\${esc(f)}">\${esc(f.split('/').pop())}</div>\`; });
+    if (importedBy.length > 10) html += \`<div style="color:var(--muted);font-size:10px">+\${importedBy.length - 10} more</div>\`;
+  }
+  if (syms.length) {
+    html += \`<div class="gnd-section">Symbols</div>\`;
+    syms.slice(0, 15).forEach(s => {
+      html += \`<div class="gnd-row"><span style="color:var(--text)">\${esc(s.name)}</span> <span style="color:var(--muted)">\${s.kind}</span>\${s.exported ? ' <span style="color:var(--green)">✓</span>' : ''}</div>\`;
+    });
+    if (syms.length > 15) html += \`<div style="color:var(--muted);font-size:10px">+\${syms.length - 15} more</div>\`;
+  }
+  if (smells.length) {
+    html += \`<div class="gnd-section">Smells</div>\`;
+    smells.slice(0, 5).forEach(s => { html += \`<div class="gnd-row"><span class="badge badge-yellow" style="font-size:10px">\${esc(s.smell)}</span> line \${s.line||'?'}</div>\`; });
+  }
+  panel.innerHTML = html;
 }
 
 function renderSmells() {
