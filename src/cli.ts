@@ -630,6 +630,57 @@ program
     console.log();
   });
 
+// ─── Command: surface ─────────────────────────────────────────────────────────
+
+program
+  .command("surface [dir]")
+  .description("List every exported symbol — the public API surface of the codebase")
+  .option("--json", "Output as JSON")
+  .option("--kind <kind>", "Filter by symbol kind (function, class, interface, type, const, enum)")
+  .option("--full", "Include signatures and docs")
+  .action(async (dir: string | undefined, opts: { json?: boolean; kind?: string; full?: boolean }) => {
+    const { abs, rel } = resolveArg(dir ?? ".");
+    if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
+    const skOpts = resolveOptions({ detail: opts.full ? "full" : "outline", emitHtml: false });
+    const files = collectSourceFiles(abs, skOpts);
+
+    interface ApiSym { name: string; kind: string; file: string; line: number; exported: boolean; signature?: string | null }
+    const results: ApiSym[] = [];
+
+    function collect(syms: import("./types.js").SymbolNode[], file: string) {
+      for (const s of syms) {
+        if (s.exported && (!opts.kind || s.kind === opts.kind)) {
+          results.push({ name: s.name, kind: s.kind, file, line: s.range.startLine, exported: true, ...(s.signature ? { signature: s.signature } : {}) });
+        }
+        if (s.children?.length) collect(s.children, file);
+      }
+    }
+
+    for (const file of files) {
+      const rel2 = path.relative(ROOT, file).split(path.sep).join("/");
+      try {
+        const skel = await buildSkeleton(file, rel2, skOpts);
+        collect(skel.symbols, rel2);
+      } catch { /* skip */ }
+    }
+
+    if (opts.json) return jsonOut({ scanned: files.length, total: results.length, symbols: results });
+
+    header(`API Surface — ${rel}/  ${dim(`(${results.length} exported symbols across ${files.length} files)`)}`);
+    if (results.length === 0) { console.log(indent(dim("No exported symbols found."))); console.log(); return; }
+
+    const byFile: Record<string, ApiSym[]> = {};
+    for (const r of results) (byFile[r.file] = byFile[r.file] ?? []).push(r);
+    for (const [f, syms] of Object.entries(byFile)) {
+      console.log(indent(bold(f)));
+      for (const s of syms) {
+        const sig = s.signature ? dim("  " + s.signature.slice(0, 80)) : "";
+        console.log(indent(green("+ ") + s.name + dim(` (${s.kind})`) + sig, 4));
+      }
+    }
+    console.log();
+  });
+
 // ─── Command: diff ────────────────────────────────────────────────────────────
 
 program

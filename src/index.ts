@@ -626,6 +626,89 @@ server.registerTool(
   },
 );
 
+/* ─────────────────── tool: find_api_surface ────────────────────────────── */
+server.registerTool(
+  "find_api_surface",
+  {
+    title: "Find public API surface",
+    description:
+      "Scan a directory and return every exported symbol — the public API surface of the codebase. " +
+      "Useful for generating documentation, detecting API breakage, and understanding what a package exposes.\n\n" +
+      "Returns symbols grouped by file, each with name, kind, range, and optional signature. " +
+      "Use detail='full' to include signatures and docs. Pass kind to filter to specific symbol types.",
+    inputSchema: {
+      path: z.string().describe("Directory to scan, relative to project root or absolute within it."),
+      detail: z.enum(["outline", "full"]).optional().describe('"outline" (default) = names+kinds; "full" adds signatures and docs.'),
+      kind: z
+        .enum(["function", "class", "interface", "type", "const", "var", "enum", "method"])
+        .optional()
+        .describe("Filter to a specific symbol kind."),
+    },
+  },
+  async ({ path: input, detail, kind }) => {
+    try {
+      const { abs, rel, root } = resolveInRoot(input);
+      if (!fs.statSync(abs).isDirectory()) {
+        return errorText("find_api_surface requires a directory.");
+      }
+
+      const opts = resolveOptions({ detail, emitHtml: false });
+      const files = collectSourceFiles(abs, opts);
+      const errors: Array<{ file: string; error: string }> = [];
+
+      interface ApiSymbol {
+        name: string;
+        kind: string;
+        range: { startLine: number; endLine: number };
+        signature?: string | null;
+        doc?: string | null;
+      }
+      interface ApiFile { file: string; language: string; symbols: ApiSymbol[] }
+      const apiFiles: ApiFile[] = [];
+      let totalSymbols = 0;
+
+      function collectExported(syms: SymbolNode[], result: ApiSymbol[]): void {
+        for (const s of syms) {
+          if (s.exported && (!kind || s.kind === kind)) {
+            const entry: ApiSymbol = { name: s.name, kind: s.kind, range: s.range };
+            if (s.signature) entry.signature = s.signature;
+            if (s.doc) entry.doc = s.doc;
+            result.push(entry);
+          }
+          if (s.children?.length) collectExported(s.children, result);
+        }
+      }
+
+      for (const file of files) {
+        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        try {
+          const skel = await buildSkeleton(file, fileRel, opts);
+          const exported: ApiSymbol[] = [];
+          collectExported(skel.symbols, exported);
+          if (exported.length > 0) {
+            totalSymbols += exported.length;
+            apiFiles.push({ file: fileRel, language: skel.language, symbols: exported });
+          }
+        } catch (err) {
+          errors.push({ file: fileRel, error: describeError(err) });
+        }
+      }
+
+      return jsonText({
+        directory: rel.split(path.sep).join("/"),
+        scanned: files.length,
+        filesWithExports: apiFiles.length,
+        totalExportedSymbols: totalSymbols,
+        ...(kind ? { kindFilter: kind } : {}),
+        ...(errors.length > 0 ? { errors } : {}),
+        files: apiFiles,
+      });
+    } catch (err) {
+      return errorText(describeError(err));
+    }
+  },
+);
+
 /* ─────────────────── tool: find_dead_code ──────────────────────────────── */
 server.registerTool(
   "find_dead_code",

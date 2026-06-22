@@ -6,6 +6,14 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.8] — 2026-06-22 · patch
+
+- **feat:** new MCP tool `find_api_surface` — scans a directory and returns every exported symbol grouped by file; supports `kind` filter and `detail=full` for signatures + docs
+- **feat:** new CLI command `ast-map surface [dir]` — pretty-prints the public API surface with `--kind`, `--full`, `--json` flags
+- **feat:** graph node click → inline detail panel — clicking a node in the Dependency Graph opens a side panel showing imports, imported-by, symbols, and smells for that file without leaving the page
+
+---
+
 ## [2.0.7] — 2026-06-22 · patch
 
 - **feat:** new MCP tool `analyze_pr_diff` — diffs working tree vs a base git ref, returns per-file symbol changes (added/removed/modified), breaking exports with blast-radius, smells + security on changed files only
