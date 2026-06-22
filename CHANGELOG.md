@@ -6,6 +6,16 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.9] — 2026-06-22 · patch
+
+- **feat:** new MCP tool `find_orphan_types` — finds exported `type` and `interface` declarations that are never imported by other files in the scan root; lighter review than full dead-code since types may be used as structural contracts
+- **feat:** new CLI command `ast-map orphan-types [dir]` — pretty table of orphan types with `--json` flag
+- **feat:** `ast-map smells --format=gha` — emits GitHub Actions workflow annotation format (`::warning file=...::`) for direct integration in CI steps
+- **feat:** `ast-map security --format=gha` — emits `::error`/`::warning`/`::notice` annotations by severity for use in GHA workflows
+- **feat:** web UI keyboard shortcuts — `Ctrl+K` / `Cmd+K` jumps to Run Commands and focuses the search field; `Escape` clears active search or closes the graph node detail panel
+
+---
+
 ## [2.0.8] — 2026-06-22 · patch
 
 - **feat:** new MCP tool `find_api_surface` — scans a directory and returns every exported symbol grouped by file; supports `kind` filter and `detail=full` for signatures + docs

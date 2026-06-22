@@ -963,6 +963,33 @@ function exportTab(id) {
   URL.revokeObjectURL(a.href);
 }
 
+// ─── Keyboard shortcuts ───────────────────────────────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    var runNav = document.querySelector('[data-page="run"]');
+    if (runNav) runNav.click();
+    setTimeout(function() {
+      var search = document.querySelector('#cmd-panel .search');
+      if (search) { search.focus(); search.select(); }
+    }, 50);
+    return;
+  }
+  if (e.key === 'Escape') {
+    var active = document.activeElement;
+    if (active && active.classList && active.classList.contains('search')) {
+      active.value = '';
+      active.dispatchEvent(new Event('input'));
+      active.blur();
+      return;
+    }
+    var detail = document.getElementById('graph-node-detail');
+    if (detail && detail.querySelector('.gnd-title')) {
+      detail.innerHTML = '<div style="color:var(--muted);text-align:center;padding:32px 8px;font-size:12px">← Click a node to inspect</div>';
+    }
+  }
+});
+
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 loadAll();
 
