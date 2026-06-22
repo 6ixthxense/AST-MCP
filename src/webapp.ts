@@ -88,6 +88,8 @@ export function webAppHtml(port: number): string {
   .filter-input:focus { border-color: var(--accent); }
   .export-btn { padding: 4px 10px; background: transparent; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 11px; cursor: pointer; }
   .export-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .cancel-btn { margin-left: 12px; padding: 3px 10px; background: transparent; border: 1px solid var(--red); border-radius: 4px; color: var(--red); font-size: 11px; cursor: pointer; }
+  .cancel-btn:hover { background: rgba(239,68,68,.1); }
   .graph-controls { display: flex; gap: 10px; margin-bottom: 8px; align-items: center; }
   .graph-search { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; color: var(--text); font-size: 13px; outline: none; width: 280px; }
   .graph-search:focus { border-color: var(--accent); }
@@ -536,11 +538,17 @@ var CMDS = [
       { name: 'type', ph: 'deps | class | modules', req: false }
     ]},
     { id: 'doc', label: '📝 Docs', desc: 'Generate Markdown documentation' }
+  ]},
+  { group: 'Git / PR', items: [
+    { id: 'pr_diff', label: '🔀 PR Diff Analysis', desc: 'Symbol changes, breaking exports, smells & security on changed files', fields: [
+      { name: 'base', ph: 'Base ref (default: main)', req: false }
+    ]}
   ]}
 ];
 
 var _tabCount = 0;
 var _runInit = false;
+var _tabAbort = {};
 
 function renderRun() {
   if (_runInit) return;
@@ -601,23 +609,36 @@ async function runCmd(id) {
       if (v) args[f.name] = v;
     }
   }
-  var firstArg = args.query || args.symbol || args.file || args.type || '';
+  var firstArg = args.query || args.symbol || args.file || args.base || args.type || '';
   var label = cmd.label + (firstArg ? ': ' + firstArg : '');
   var tabId = ++_tabCount;
-  addTab(tabId, label, '<div class="loading"><span class="spinner"></span> Running…</div>');
+  var ctrl = new AbortController();
+  _tabAbort[tabId] = ctrl;
+  addTab(tabId, label, '<div class="loading"><span class="spinner"></span> Running… <button class="cancel-btn" onclick="cancelTab(' + tabId + ')">✕ Cancel</button></div>');
   try {
     var r = await fetch('http://localhost:${port}/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cmd: id, args: args })
+      body: JSON.stringify({ cmd: id, args: args }),
+      signal: ctrl.signal
     });
     var json = await r.json();
     if (!r.ok) throw new Error(json.error || r.statusText);
+    delete _tabAbort[tabId];
     _tabData[tabId] = { cmd: id, data: json.data };
     setTabContent(tabId, renderResult(id, json.data));
   } catch(e) {
-    setTabContent(tabId, '<div class="error-box">' + esc(e.message) + '</div>');
+    delete _tabAbort[tabId];
+    if (e.name === 'AbortError') {
+      setTabContent(tabId, '<div style="color:var(--muted);padding:16px">Cancelled.</div>');
+    } else {
+      setTabContent(tabId, '<div class="error-box">' + esc(e.message) + '</div>');
+    }
   }
+}
+
+function cancelTab(tabId) {
+  if (_tabAbort[tabId]) { _tabAbort[tabId].abort(); delete _tabAbort[tabId]; }
 }
 
 function addTab(id, label, content) {
@@ -657,6 +678,7 @@ function switchTab(id) {
 
 function closeTab(id, e) {
   e.stopPropagation();
+  if (_tabAbort[id]) { _tabAbort[id].abort(); delete _tabAbort[id]; }
   var tab = document.querySelector('.tab[data-tab="' + id + '"]');
   var pane = document.getElementById('pane-' + id);
   var wasActive = tab && tab.classList.contains('active');
@@ -766,6 +788,44 @@ function renderResult(cmd, data) {
   if (cmd === 'doc') {
     return '<div class="card" style="margin-bottom:8px"><b>Generated docs</b> — '+data.files+' files, '+data.symbols+' symbols</div>'
       + '<div class="result-pre">'+esc(data.markdown||'')+'</div>';
+  }
+  if (cmd === 'pr_diff') {
+    if (!data) return '<div style="color:var(--muted)">No diff data</div>';
+    var s = data.summary || {};
+    var summary = '<div class="card" style="margin-bottom:8px;display:flex;gap:20px;flex-wrap:wrap">'
+      + '<span><b>Files changed:</b> ' + (s.filesChanged||0) + '</span>'
+      + '<span><b>Added:</b> <span style="color:var(--green)">+' + (s.added||0) + '</span></span>'
+      + '<span><b>Removed:</b> <span style="color:var(--red)">-' + (s.removed||0) + '</span></span>'
+      + '<span><b>Modified:</b> ' + (s.modified||0) + '</span>'
+      + '<span><b>Breaking:</b> <span style="color:' + ((s.breaking||0)>0?'var(--red)':'var(--green)') + '">' + (s.breaking||0) + '</span></span>'
+      + '<span><b>Smells:</b> ' + (s.smells||0) + '</span>'
+      + '<span><b>Security:</b> <span style="color:' + ((s.securityIssues||0)>0?'var(--red)':'var(--green)') + '">' + (s.securityIssues||0) + '</span></span>'
+      + '</div>';
+    var breakHtml = '';
+    if ((data.breaking||[]).length) {
+      breakHtml = '<div style="margin-bottom:4px;font-size:12px;font-weight:600;color:var(--red)">Breaking changes</div>'
+        + renderTable(['File','Symbol','Reason'], data.breaking, function(b) {
+          return [b.file, '<b>'+esc(b.symbol)+'</b>', b.reason];
+        });
+    }
+    var filesHtml = (data.files||[]).length
+      ? '<div style="margin:8px 0 4px;font-size:12px;font-weight:600">Changed files</div>'
+        + renderTable(['File','Status','Added','Removed','Modified'], data.files, function(f) {
+          var cls = f.status==='added'?'badge-green':f.status==='deleted'?'badge-red':'badge-blue';
+          return [f.file, '<span class="badge '+cls+'">'+f.status+'</span>', f.added.length, f.removed.length, f.modified.length];
+        }) : '';
+    var smellsHtml = (data.smells||[]).length
+      ? '<div style="margin:8px 0 4px;font-size:12px;font-weight:600">Smells in changed files</div>'
+        + renderTable(['Smell','Symbol','File','Line'], data.smells.slice(0,20), function(d) {
+          return ['<span class="badge badge-yellow">'+esc(d.smell)+'</span>', d.symbol||'', d.file, d.line||''];
+        }) : '';
+    var secHtml = (data.security||[]).length
+      ? '<div style="margin:8px 0 4px;font-size:12px;font-weight:600">Security issues in changed files</div>'
+        + renderTable(['Rule','Sev','File','Line'], data.security.slice(0,20), function(d) {
+          var cls = (d.severity==='critical'||d.severity==='high')?'badge-red':'badge-yellow';
+          return ['<span class="badge '+cls+'">'+esc(d.rule)+'</span>', d.severity, d.file, d.line];
+        }) : '';
+    return summary + breakHtml + filesHtml + smellsHtml + secHtml;
   }
   return '<div class="result-pre">'+esc(JSON.stringify(data, null, 2))+'</div>';
 }
