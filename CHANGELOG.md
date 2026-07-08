@@ -6,7 +6,7 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
-## [2.0.9] — 2026-07-08 · patch
+## [2.0.10] — 2026-07-08 · patch
 
 - **fix:** Python `from x import y` (unaliased, the most common Python import form) was silently dropped by the extractor — a `dotted_name`/`relative_import` type check meant to skip the module path also matched the imported name itself. Every downstream feature (graph edges, `resolve_imports`, call graph) missed these imports entirely; multi-name (`from x import a, b`) and single-dot (`from . import a`) forms were affected too.
 - **fix:** the same bug's sibling — relative-import resolution never recognized `.py`/`.rb` extensions (`resolveImportPath`'s probe list was TS/JS-only), so even the imports that *were* extracted couldn't resolve to a file. Python cross-file graph edges, `resolve_imports`, and call-graph callee origin were effectively non-functional despite being documented as supported.
@@ -17,6 +17,16 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 - **fix:** `ast-map serve` web UI hardcoded `http://localhost:<port>` for every API call, the Run Commands fetch, and the live-reload `EventSource` — broke the dashboard whenever it was reached via anything other than the literal host `localhost` (a LAN IP, WSL/container port-forwarding, an SSH tunnel). Now uses relative URLs, same-origin with the page.
 - **fix:** the History page's score-trend chart never rendered its x-axis — `d3.axisBottom(...)(...)` was called for its (nonexistent) return value instead of being applied via `selection.call(axis)`, so the date labels silently no-opped to an empty string on every render. Rewired to build the chart with real D3 selections.
 - **fix:** Run Commands result tables inconsistently HTML-escaped their output — symbol names, file paths, and security-issue messages echoed straight from source-derived content went into several table cells (and the dashboard's "recent issues" list) without `esc()`, while sibling fields in the same row were escaped. Closed the gaps across all `renderResult` cases.
+
+---
+
+## [2.0.9] — 2026-06-22 · patch
+
+- **feat:** new MCP tool `find_orphan_types` — finds exported `type` and `interface` declarations that are never imported by other files in the scan root; lighter review than full dead-code since types may be used as structural contracts
+- **feat:** new CLI command `ast-map orphan-types [dir]` — pretty table of orphan types with `--json` flag
+- **feat:** `ast-map smells --format=gha` — emits GitHub Actions workflow annotation format (`::warning file=...::`) for direct integration in CI steps
+- **feat:** `ast-map security --format=gha` — emits `::error`/`::warning`/`::notice` annotations by severity for use in GHA workflows
+- **feat:** web UI keyboard shortcuts — `Ctrl+K` / `Cmd+K` jumps to Run Commands and focuses the search field; `Escape` clears active search or closes the graph node detail panel
 
 ---
 
