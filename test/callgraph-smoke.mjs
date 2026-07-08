@@ -208,5 +208,60 @@ console.log("\nPython (decorator capture in call graph)");
     (cg2?.decorators?.includes("staticmethod") && cg2?.decorators?.includes("cache")) ?? false);
 }
 
+// ─── PHP (constructor + method call via `use`) ──────────────────────────
+console.log("\nPHP (constructor call via `use App\\Models\\Inventory`)");
+{
+  clearCrossLangIndexCache();
+  const root = path.join(fixtures, "php");
+  const skels = await buildSkels(root, ["src/Inventory.php", "src/InventoryService.php"]);
+  const cg = await buildCallGraph(
+    path.join(root, "src/InventoryService.php"),
+    "make",
+    root,
+    skels,
+  );
+  console.log("    calls:", JSON.stringify(cg?.calls));
+  console.log("    calledBy:", JSON.stringify(cg?.calledBy));
+  check("PHP: make() found", !!cg);
+  const newInv = cg?.calls.find(c => c.callee === "new Inventory");
+  check("PHP: captured `new Inventory` call", !!newInv);
+  check("PHP: resolved to src/Inventory.php", newInv?.calleeFileRel === "src/Inventory.php");
+  // `use` only names the class, not the method — same limitation as Java's
+  // `reserve()` case: calledBy on the method itself stays empty.
+  check("PHP: calledBy is empty (nobody imports `make` itself)", cg?.calledBy.length === 0);
+}
+
+// ─── Ruby (call resolution limitation + reverse calledBy via scan) ─────
+console.log("\nRuby (no named imports → forward calls unresolved, reverse via call-site scan)");
+{
+  const root = path.join(fixtures, "ruby");
+  const skels = await buildSkels(root, ["lib/inventory.rb", "lib/service.rb"]);
+
+  const cgMake = await buildCallGraph(path.join(root, "lib/service.rb"), "make", root, skels);
+  console.log("    make calls:", JSON.stringify(cgMake?.calls));
+  check("Ruby: make() found", !!cgMake);
+  check("Ruby: `Inventory.new` callee captured (text only — require never names the class)",
+    cgMake?.calls.some(c => c.callee === "Inventory.new") ?? false);
+
+  const cgInc = await buildCallGraph(path.join(root, "lib/inventory.rb"), "increment", root, skels);
+  console.log("    increment calledBy:", JSON.stringify(cgInc?.calledBy));
+  check("Ruby: increment() found", !!cgInc);
+  check("Ruby: increment calledBy includes lib/service.rb (call-site scan via require_relative)",
+    cgInc?.calledBy.some(c => c.file === "lib/service.rb") ?? false);
+}
+
+// ─── Python (cross-file constructor call, relative import) ─────────────
+console.log("\nPython (cross-file constructor call via `from .models import Inventory`)");
+{
+  const root = path.join(fixtures, "python");
+  const skels = await buildSkels(root, ["pkg/__init__.py", "pkg/models.py", "pkg/service.py"]);
+  const cg = await buildCallGraph(path.join(root, "pkg/service.py"), "make", root, skels);
+  console.log("    calls:", JSON.stringify(cg?.calls));
+  check("Python: make() found", !!cg);
+  const invCall = cg?.calls.find(c => c.callee === "Inventory");
+  check("Python: `Inventory()` call captured", !!invCall);
+  check("Python: resolved to pkg/models.py", invCall?.calleeFileRel === "pkg/models.py");
+}
+
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
 process.exit(failures === 0 ? 0 : 1);

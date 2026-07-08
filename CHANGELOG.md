@@ -6,6 +6,20 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.9] — 2026-07-08 · patch
+
+- **fix:** Python `from x import y` (unaliased, the most common Python import form) was silently dropped by the extractor — a `dotted_name`/`relative_import` type check meant to skip the module path also matched the imported name itself. Every downstream feature (graph edges, `resolve_imports`, call graph) missed these imports entirely; multi-name (`from x import a, b`) and single-dot (`from . import a`) forms were affected too.
+- **fix:** the same bug's sibling — relative-import resolution never recognized `.py`/`.rb` extensions (`resolveImportPath`'s probe list was TS/JS-only), so even the imports that *were* extracted couldn't resolve to a file. Python cross-file graph edges, `resolve_imports`, and call-graph callee origin were effectively non-functional despite being documented as supported.
+- **feat:** Python absolute dotted imports (`from pkg.mod import X`, no leading dot) now resolve against the project root and a conventional `src/` layout.
+- **feat:** PHP cross-file graph + call-graph wiring — `use App\Models\User;` resolves via a new namespace-FQCN index (mirrors Java/Kotlin: `namespace X;` directive + class/interface/trait/enum name → file). Wires into `resolve_imports`, the symbol graph (`imports` edges, symbol-level), and the call graph (`new Foo()`, `$obj->method()`, `Class::method()`, `helper()`).
+- **feat:** Ruby cross-file graph wiring — `require_relative './x'` resolves as a relative path; bare `require 'foo/bar'` is tried against `lib/`, `app/`, and the project root. Since Ruby imports never name a symbol, `resolve_imports`/graph edges are file-level and reverse `calledBy` uses call-site scanning (like C#/Go); forward callee-origin resolution stays limited, same as C/C++/Swift.
+- **feat:** call graph now recognizes Ruby `call` nodes (`receiver`/`method` fields) and PHP `member_call_expression`/`scoped_call_expression`/`function_call_expression`/`object_creation_expression`.
+- **fix:** `ast-map serve` web UI hardcoded `http://localhost:<port>` for every API call, the Run Commands fetch, and the live-reload `EventSource` — broke the dashboard whenever it was reached via anything other than the literal host `localhost` (a LAN IP, WSL/container port-forwarding, an SSH tunnel). Now uses relative URLs, same-origin with the page.
+- **fix:** the History page's score-trend chart never rendered its x-axis — `d3.axisBottom(...)(...)` was called for its (nonexistent) return value instead of being applied via `selection.call(axis)`, so the date labels silently no-opped to an empty string on every render. Rewired to build the chart with real D3 selections.
+- **fix:** Run Commands result tables inconsistently HTML-escaped their output — symbol names, file paths, and security-issue messages echoed straight from source-derived content went into several table cells (and the dashboard's "recent issues" list) without `esc()`, while sibling fields in the same row were escaped. Closed the gaps across all `renderResult` cases.
+
+---
+
 ## [2.0.8] — 2026-06-22 · patch
 
 - **feat:** new MCP tool `find_api_surface` — scans a directory and returns every exported symbol grouped by file; supports `kind` filter and `detail=full` for signatures + docs

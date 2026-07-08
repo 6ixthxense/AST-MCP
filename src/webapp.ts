@@ -1,5 +1,5 @@
 /** Generate the self-contained SPA HTML served by `ast-map serve`. */
-export function webAppHtml(port: number): string {
+export function webAppHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -225,7 +225,7 @@ export function webAppHtml(port: number): string {
 <div class="tooltip" id="tooltip"></div>
 
 <script>
-const API = 'http://localhost:${port}/api';
+const API = '/api';
 let state = { report: null, graph: null, dead: [], history: [], skeletons: [], smells: [], security: [] };
 var _graphNodeG = null, _graphLinkG = null, _graphFilterQ = '';
 var _tabData = {};
@@ -296,13 +296,13 @@ function renderOverview() {
 
   const topNodes = (state.graph?.nodes ?? []).filter(n => n.nodeType === 'symbol').sort((a, b) => (b.inDegree ?? 0) - (a.inDegree ?? 0)).slice(0, 8);
   document.getElementById('top-syms').innerHTML = topNodes.map(n =>
-    \`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)"><span>\${n.id?.split('::').pop() ?? n.id}</span><span class="badge badge-blue">\${n.inDegree ?? 0}</span></div>\`
+    \`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)"><span>\${esc(n.id?.split('::').pop() ?? n.id)}</span><span class="badge badge-blue">\${n.inDegree ?? 0}</span></div>\`
   ).join('') || '<div style="color:var(--muted);font-size:12px">No data</div>';
 
   const recent = [...state.smells.slice(0, 3).map(s => ({ type: '🤢', msg: (s.symbol ?? s.smell), file: s.file })),
     ...state.security.slice(0, 3).map(s => ({ type: '🔒', msg: s.rule, file: s.file }))];
   document.getElementById('recent-issues').innerHTML = recent.map(i =>
-    \`<div style="display:flex;gap:8px;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)"><span>\${i.type}</span><div><div>\${i.msg}</div><div style="color:var(--muted)">\${i.file}</div></div></div>\`
+    \`<div style="display:flex;gap:8px;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)"><span>\${i.type}</span><div><div>\${esc(i.msg)}</div><div style="color:var(--muted)">\${esc(i.file)}</div></div></div>\`
   ).join('') || '<div style="color:var(--green);font-size:12px">No issues 🎉</div>';
 }
 
@@ -310,21 +310,28 @@ function renderTimeline() {
   const hist = state.history;
   const tbody = document.getElementById('history-table');
   tbody.innerHTML = [...hist].reverse().map(h =>
-    \`<tr><td>\${h.date}</td><td><span class="badge \${gradeClass(h.score)}">\${h.score}</span></td><td>\${h.grade}</td><td>\${h.files}</td><td>\${h.dead}</td><td>\${h.cycles}</td></tr>\`
+    \`<tr><td>\${esc(h.date)}</td><td><span class="badge \${gradeClass(h.score)}">\${h.score}</span></td><td>\${esc(h.grade)}</td><td>\${h.files}</td><td>\${h.dead}</td><td>\${h.cycles}</td></tr>\`
   ).join('');
 
+  const svg = d3.select('#timeline-svg');
+  svg.selectAll('*').remove();
   if (hist.length < 2) return;
-  const svg = document.getElementById('timeline-svg');
-  const W = svg.clientWidth || 600, H = 120, M = { t: 10, r: 20, b: 30, l: 40 };
+  const svgEl = document.getElementById('timeline-svg');
+  const W = svgEl.clientWidth || 600, H = 120, M = { t: 10, r: 20, b: 30, l: 40 };
   const iW = W - M.l - M.r, iH = H - M.t - M.b;
   const xs = d3.scalePoint().domain(hist.map(h => h.date)).range([0, iW]);
   const ys = d3.scaleLinear().domain([0, 100]).range([iH, 0]);
   const line = d3.line().x(h => xs(h.date) ?? 0).y(h => ys(h.score));
-  svg.innerHTML = \`<g transform="translate(\${M.l},\${M.t})">
-    <g transform="translate(0,\${iH})">\${d3.axisBottom(xs).ticks(5)(d3.select(document.createElementNS('http://www.w3.org/2000/svg','g'))?.node?.() ?? document.createElementNS('http://www.w3.org/2000/svg','g'))?.outerHTML ?? ''}</g>
-    <path d="\${line(hist)}" fill="none" stroke="#7c3aed" stroke-width="2"/>
-    \${hist.map(h => \`<circle cx="\${xs(h.date)}" cy="\${ys(h.score)}" r="4" fill="#7c3aed"/>\`).join('')}
-  </g>\`;
+
+  const g = svg.append('g').attr('transform', \`translate(\${M.l},\${M.t})\`);
+  g.append('g')
+    .attr('transform', \`translate(0,\${iH})\`)
+    .attr('color', '#475569')
+    .style('font-size', '10px')
+    .call(d3.axisBottom(xs).ticks(5));
+  g.append('path').attr('d', line(hist)).attr('fill', 'none').attr('stroke', '#7c3aed').attr('stroke-width', 2);
+  g.selectAll('circle').data(hist).join('circle')
+    .attr('cx', h => xs(h.date)).attr('cy', h => ys(h.score)).attr('r', 4).attr('fill', '#7c3aed');
 }
 
 let allFiles = [];
@@ -672,7 +679,7 @@ async function runCmd(id) {
   _tabAbort[tabId] = ctrl;
   addTab(tabId, label, '<div class="loading"><span class="spinner"></span> Running… <button class="cancel-btn" onclick="cancelTab(' + tabId + ')">✕ Cancel</button></div>');
   try {
-    var r = await fetch('http://localhost:${port}/api/run', {
+    var r = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cmd: id, args: args }),
@@ -756,7 +763,7 @@ function renderResult(cmd, data) {
   if (cmd === 'dead') {
     if (!data.length) return '<div style="color:var(--green)">No dead exports 🎉</div>';
     return renderTable(['Symbol','Kind','File','Confidence'], data, function(d) {
-      return [d.symbol, '<span class="pill">'+esc(d.kind)+'</span>', d.file, '<span class="badge '+(d.confidence==='high'?'badge-red':'badge-yellow')+'">'+d.confidence+'</span>'];
+      return [esc(d.symbol), '<span class="pill">'+esc(d.kind)+'</span>', esc(d.file), '<span class="badge '+(d.confidence==='high'?'badge-red':'badge-yellow')+'">'+esc(d.confidence)+'</span>'];
     });
   }
   if (cmd === 'cycles') {
@@ -766,7 +773,7 @@ function renderResult(cmd, data) {
   if (cmd === 'duplicates') {
     if (!data.length) return '<div style="color:var(--green)">No duplicates 🎉</div>';
     return renderTable(['Symbol','Kind','Files'], data, function(d) {
-      return [d.name, '<span class="pill">'+esc(d.kind)+'</span>', (d.locations||[]).map(function(l){return l.file;}).join(', ')];
+      return [esc(d.name), '<span class="pill">'+esc(d.kind)+'</span>', esc((d.locations||[]).map(function(l){return l.file;}).join(', '))];
     });
   }
   if (cmd === 'similar') {
@@ -780,37 +787,37 @@ function renderResult(cmd, data) {
     return renderTable(['File','Functions','Max CC','Avg CC','Rating'], data, function(d) {
       var r = d.rating||'';
       var cls = (r==='high'||r==='very-high')?'badge-red':r==='moderate'?'badge-yellow':'badge-green';
-      return [d.file, (d.functions||[]).length, d.maxComplexity||0, Math.round(d.avgComplexity||0), '<span class="badge '+cls+'">'+r+'</span>'];
+      return [esc(d.file), (d.functions||[]).length, d.maxComplexity||0, Math.round(d.avgComplexity||0), '<span class="badge '+cls+'">'+esc(r)+'</span>'];
     });
   }
   if (cmd === 'top') {
     return renderTable(['Symbol','Kind','File','Imports'], data, function(d) {
-      return [d.symbol||d.id, '<span class="pill">'+esc(d.kind||'')+'</span>', d.file||'', '<span class="badge badge-blue">'+(d.inDegree||d.importCount||0)+'</span>'];
+      return [esc(d.symbol||d.id), '<span class="pill">'+esc(d.kind||'')+'</span>', esc(d.file||''), '<span class="badge badge-blue">'+(d.inDegree||d.importCount||0)+'</span>'];
     });
   }
   if (cmd === 'smells') {
     if (!data.length) return '<div style="color:var(--green)">No smells 🎉</div>';
     return renderTable(['Smell','Symbol','File','Line','Sev'], data, function(d) {
-      return ['<span class="badge badge-yellow">'+esc(d.smell)+'</span>', d.symbol||'', d.file, d.line||'', d.severity];
+      return ['<span class="badge badge-yellow">'+esc(d.smell)+'</span>', esc(d.symbol||''), esc(d.file), d.line||'', esc(d.severity)];
     });
   }
   if (cmd === 'security') {
     if (!data.length) return '<div style="color:var(--green)">No issues 🎉</div>';
     return renderTable(['Rule','Sev','File','Line','Message'], data, function(d) {
       var cls = (d.severity==='critical'||d.severity==='high')?'badge-red':'badge-yellow';
-      return ['<span class="badge '+cls+'">'+esc(d.rule)+'</span>', d.severity, d.file, d.line, d.message];
+      return ['<span class="badge '+cls+'">'+esc(d.rule)+'</span>', esc(d.severity), esc(d.file), d.line, esc(d.message)];
     });
   }
   if (cmd === 'arch') {
     if (!data.length) return '<div style="color:var(--green)">No violations 🎉</div>';
     return renderTable(['Rule','From','To','Severity'], data, function(d) {
-      return [d.rule||d.description||'', d.from||'', d.to||'', '<span class="badge '+(d.severity==='error'?'badge-red':'badge-yellow')+'">'+d.severity+'</span>'];
+      return [esc(d.rule||d.description||''), esc(d.from||''), esc(d.to||''), '<span class="badge '+(d.severity==='error'?'badge-red':'badge-yellow')+'">'+esc(d.severity)+'</span>'];
     });
   }
   if (cmd === 'find') {
     if (!data.length) return '<div style="color:var(--muted)">No symbols found</div>';
     return renderTable(['Symbol','Kind','File','Line','Exported'], data, function(d) {
-      return [d.name, '<span class="pill">'+esc(d.kind)+'</span>', d.file, d.line||'', d.exported?'✓':''];
+      return [esc(d.name), '<span class="pill">'+esc(d.kind)+'</span>', esc(d.file), d.line||'', d.exported?'✓':''];
     });
   }
   if (cmd === 'impact') {
@@ -818,7 +825,7 @@ function renderResult(cmd, data) {
     var header = '<div class="card" style="margin-bottom:8px"><b>Direct:</b> '+(data.direct||[]).length+' &nbsp; <b>Transitive:</b> '+(data.transitive||[]).length+' &nbsp; <b>Total files:</b> '+data.totalFiles+'</div>';
     var allNodes = (data.direct||[]).map(function(n){return Object.assign({},n,{rel:'direct'});}).concat((data.transitive||[]).map(function(n){return Object.assign({},n,{rel:'transitive'});}));
     return header + renderTable(['File','Symbol','Relation'], allNodes, function(d) {
-      return [d.file, d.symbol||'', '<span class="badge '+(d.rel==='direct'?'badge-blue':'badge-yellow')+'">'+d.rel+'</span>'];
+      return [esc(d.file), esc(d.symbol||''), '<span class="badge '+(d.rel==='direct'?'badge-blue':'badge-yellow')+'">'+d.rel+'</span>'];
     });
   }
   if (cmd === 'fileDeps') {
@@ -861,25 +868,25 @@ function renderResult(cmd, data) {
     if ((data.breaking||[]).length) {
       breakHtml = '<div style="margin-bottom:4px;font-size:12px;font-weight:600;color:var(--red)">Breaking changes</div>'
         + renderTable(['File','Symbol','Reason'], data.breaking, function(b) {
-          return [b.file, '<b>'+esc(b.symbol)+'</b>', b.reason];
+          return [esc(b.file), '<b>'+esc(b.symbol)+'</b>', esc(b.reason)];
         });
     }
     var filesHtml = (data.files||[]).length
       ? '<div style="margin:8px 0 4px;font-size:12px;font-weight:600">Changed files</div>'
         + renderTable(['File','Status','Added','Removed','Modified'], data.files, function(f) {
           var cls = f.status==='added'?'badge-green':f.status==='deleted'?'badge-red':'badge-blue';
-          return [f.file, '<span class="badge '+cls+'">'+f.status+'</span>', f.added.length, f.removed.length, f.modified.length];
+          return [esc(f.file), '<span class="badge '+cls+'">'+esc(f.status)+'</span>', f.added.length, f.removed.length, f.modified.length];
         }) : '';
     var smellsHtml = (data.smells||[]).length
       ? '<div style="margin:8px 0 4px;font-size:12px;font-weight:600">Smells in changed files</div>'
         + renderTable(['Smell','Symbol','File','Line'], data.smells.slice(0,20), function(d) {
-          return ['<span class="badge badge-yellow">'+esc(d.smell)+'</span>', d.symbol||'', d.file, d.line||''];
+          return ['<span class="badge badge-yellow">'+esc(d.smell)+'</span>', esc(d.symbol||''), esc(d.file), d.line||''];
         }) : '';
     var secHtml = (data.security||[]).length
       ? '<div style="margin:8px 0 4px;font-size:12px;font-weight:600">Security issues in changed files</div>'
         + renderTable(['Rule','Sev','File','Line'], data.security.slice(0,20), function(d) {
           var cls = (d.severity==='critical'||d.severity==='high')?'badge-red':'badge-yellow';
-          return ['<span class="badge '+cls+'">'+esc(d.rule)+'</span>', d.severity, d.file, d.line];
+          return ['<span class="badge '+cls+'">'+esc(d.rule)+'</span>', esc(d.severity), esc(d.file), d.line];
         }) : '';
     return summary + breakHtml + filesHtml + smellsHtml + secHtml;
   }
@@ -968,7 +975,7 @@ loadAll();
 
 // ─── Live reload via SSE ──────────────────────────────────────────────────────
 (function connectSSE() {
-  const es = new EventSource('http://localhost:${port}/events');
+  const es = new EventSource('/events');
   es.addEventListener('change', () => loadAll());
   es.addEventListener('error', () => { es.close(); setTimeout(connectSSE, 3000); });
 })();

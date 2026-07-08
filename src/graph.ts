@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { SkeletonFile, SymbolNode, ImportRef } from "./types.js";
-import { resolveImportPath, resolveAliasedImport } from "./resolver.js";
-import { resolveWorkspaceImportCached } from "./workspace.js";
+import { resolvePathBasedImport } from "./resolver.js";
 import {
   buildCrossLangIndex,
   resolveCrossLangTarget,
@@ -74,19 +73,26 @@ function collectSymbolNodes(
   }
 }
 
-// Returns true for path-based import languages (TS/JS/Python/Go).
+// Returns true for path-based import languages (TS/JS/Python/Go/Ruby).
 function isPathBasedLanguage(language: string): boolean {
   return (
     language === "typescript" ||
     language === "tsx" ||
     language === "javascript" ||
     language === "python" ||
+    language === "ruby" ||
     language === "vue" ||
     language === "svelte"
   );
 }
 
-// Wire one TS/JS/Python-style relative import.
+// Side-effect-only imports (no named symbol) normally carry no wireable
+// target. Ruby's `require`/`require_relative` are its *only* import
+// mechanism though, so without a file-level edge Ruby would never appear in
+// the graph at all.
+const FILE_LEVEL_SIDE_EFFECT_LANGS = new Set(["ruby"]);
+
+// Wire one TS/JS/Python/Ruby-style relative (or language-convention) import.
 function wirePathImport(
   skel: SkeletonFile,
   imp: ImportRef,
@@ -95,13 +101,20 @@ function wirePathImport(
   exportedSymbolMap: Map<string, Map<string, string>>,
   edges: GraphEdge[],
 ): void {
-  if (imp.isSideEffect) return;
-  // Relative import → path resolve; bare specifier → monorepo workspace package.
-  const resolvedAbs = imp.from.startsWith(".")
-    ? resolveImportPath(imp.from, fromFileAbs)
-    : resolveAliasedImport(imp.from, fromFileAbs) ?? resolveWorkspaceImportCached(imp.from, root);
+  const resolvedAbs = resolvePathBasedImport(imp.from, fromFileAbs, root, skel.language);
   if (!resolvedAbs) return;
   const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
+
+  if (imp.isSideEffect) {
+    if (
+      FILE_LEVEL_SIDE_EFFECT_LANGS.has(skel.language) &&
+      exportedSymbolMap.has(resolvedRel) &&
+      resolvedRel !== skel.file
+    ) {
+      edges.push({ from: skel.file, to: resolvedRel, edgeType: "imports" });
+    }
+    return;
+  }
 
   if (imp.isNamespaceImport || imp.symbol === "*") {
     if (exportedSymbolMap.has(resolvedRel)) {
@@ -189,7 +202,7 @@ export function buildSymbolGraph(skeletons: SkeletonFile[], root: string): Symbo
       // without an explicit "exported" flag — fall back to indexing all
       // top-level symbols for those languages.
       if (sym.exported) fileExports.set(sym.name, nodeId);
-      else if (skel.language === "java" || skel.language === "csharp") {
+      else if (skel.language === "java" || skel.language === "csharp" || skel.language === "php") {
         fileExports.set(sym.name, nodeId);
       }
 
@@ -223,7 +236,8 @@ export function buildSymbolGraph(skeletons: SkeletonFile[], root: string): Symbo
         skel.language === "kotlin" ||
         skel.language === "c" ||
         skel.language === "cpp" ||
-        skel.language === "swift"
+        skel.language === "swift" ||
+        skel.language === "php"
       ) {
         wireCrossLangImport(skel, imp, fromFileAbs, root, crossIndex, exportedSymbolMap, edges);
       }

@@ -21,6 +21,8 @@ export interface CrossLangIndex {
   kotlinPackages: Map<string, string[]>;
   /** Swift: module name (dir under Sources/, else parent dir) -> relFiles. */
   swiftModules: Map<string, string[]>;
+  /** PHP: "App\Models\Foo" -> relFile that declares it (namespace + class/interface/trait/enum name). */
+  phpFqcn: Map<string, string>;
 }
 
 const TYPE_KINDS = new Set(["class", "interface", "enum", "struct"]);
@@ -54,6 +56,7 @@ export function buildCrossLangIndex(skeletons: SkeletonFile[]): CrossLangIndex {
     kotlinFqcn: new Map(),
     kotlinPackages: new Map(),
     swiftModules: new Map(),
+    phpFqcn: new Map(),
   };
 
   for (const skel of skeletons) {
@@ -97,6 +100,12 @@ export function buildCrossLangIndex(skeletons: SkeletonFile[]): CrossLangIndex {
       const arr = index.swiftModules.get(mod) ?? [];
       arr.push(skel.file);
       index.swiftModules.set(mod, arr);
+    } else if (skel.language === "php") {
+      const ns = getDirectiveValue(skel, "namespace:");
+      for (const sym of topTypeSymbols(skel.symbols)) {
+        const fqcn = ns ? `${ns}\\${sym.name}` : sym.name;
+        index.phpFqcn.set(fqcn, skel.file);
+      }
     }
   }
 
@@ -469,5 +478,54 @@ export function resolveCrossLangTarget(
     return null;
   }
 
+  if (skel.language === "php") {
+    // `use App\Models\User;` — imp.from is the fully-qualified name, imp.symbol
+    // the leaf class/interface/trait/enum name (see extractImportsPhp).
+    const fqcn = imp.from.replace(/^\\+/, "");
+    const targetFile = index.phpFqcn.get(fqcn);
+    if (targetFile && targetFile !== skel.file) {
+      return { kind: "symbol", file: targetFile, symbol: imp.symbol };
+    }
+    return null;
+  }
+
+  return null;
+}
+
+/* ─── Python absolute (dotted) import resolution ──────────────────────────── */
+
+/**
+ * Resolve a Python absolute import (`import pkg.mod` / `from pkg.mod import X`,
+ * i.e. `imp.from` with no leading dots) to an in-project .py file.
+ * Tries the project root and a conventional `src/` layout root; stdlib and
+ * third-party packages naturally miss both and return null (external).
+ */
+export function resolvePythonAbsoluteImport(dotted: string, projectRoot: string): string | null {
+  const rel = dotted.split(".").join("/");
+  if (!rel) return null;
+  for (const base of [projectRoot, path.join(projectRoot, "src")]) {
+    if (!existsDir(base)) continue;
+    const asModule = path.join(base, `${rel}.py`);
+    if (existsFile(asModule)) return asModule;
+    const asPackage = path.join(base, rel, "__init__.py");
+    if (existsFile(asPackage)) return asPackage;
+  }
+  return null;
+}
+
+/* ─── Ruby bare `require` resolution ──────────────────────────────────────── */
+
+/**
+ * Best-effort resolution of a bare `require 'foo/bar'` (no leading dots, so
+ * not handled by `require_relative`'s relative-path resolver) against the
+ * conventional Ruby load-path roots (`lib/`, `app/`, project root).
+ * Gem requires (`require 'json'`) naturally miss every root and return null.
+ */
+export function resolveRubyBareRequire(target: string, projectRoot: string): string | null {
+  for (const base of [path.join(projectRoot, "lib"), path.join(projectRoot, "app"), projectRoot]) {
+    if (!existsDir(base)) continue;
+    const p = path.join(base, `${target}.rb`);
+    if (existsFile(p)) return p;
+  }
   return null;
 }

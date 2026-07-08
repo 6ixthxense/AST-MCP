@@ -112,7 +112,7 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
 
       if (pathname === "/" || pathname === "/index.html") {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(webAppHtml(port));
+        res.end(webAppHtml());
         return;
       }
 

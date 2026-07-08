@@ -6,6 +6,8 @@ import { findSymbol } from "./analysis.js";
 import {
   buildCrossLangIndex,
   resolveCrossLangTarget,
+  resolvePythonAbsoluteImport,
+  resolveRubyBareRequire,
   type CrossLangIndex,
 } from "./crosslang.js";
 import type { ImportRef, SkeletonFile } from "./types.js";
@@ -45,15 +47,27 @@ const JS_TO_TS: Record<string, string[]> = {
   ".cjs": [".cts", ".cjs"],
 };
 
+// Non-JS path-based languages need their own extension + index-file
+// conventions (Python's `pkg/__init__.py`, Ruby has no index convention).
+const LANG_PROBE: Record<string, { exts: string[]; index: string[] }> = {
+  python: { exts: [".py"], index: ["__init__.py"] },
+  ruby: { exts: [".rb"], index: [] },
+};
+
 /**
- * Resolve a TS/JS-style relative import path to an absolute file path.
+ * Resolve a relative import path to an absolute file path, using the
+ * extension/index conventions of `language` (defaults to TS/JS).
  * Returns null for external packages or when the file cannot be found.
  */
-export function resolveImportPath(importFrom: string, fromAbs: string): string | null {
+export function resolveImportPath(importFrom: string, fromAbs: string, language?: string): string | null {
   if (!importFrom.startsWith(".")) return null;
 
   const fromDir = path.dirname(fromAbs);
   const candidate = path.resolve(fromDir, importFrom);
+
+  const langProbe = language ? LANG_PROBE[language] : undefined;
+  if (langProbe) return probeCandidateWith(candidate, langProbe.exts, langProbe.index);
+
   const declaredExt = path.extname(candidate).toLowerCase();
 
   if (declaredExt && JS_TO_TS[declaredExt]) {
@@ -69,20 +83,49 @@ export function resolveImportPath(importFrom: string, fromAbs: string): string |
 
 /** Probe a path base: exact file → +extensions → /index.<ext>. */
 function probeCandidate(candidate: string): string | null {
+  return probeCandidateWith(candidate, SRC_EXTS, SRC_EXTS.map((ext) => `index${ext}`));
+}
+
+function probeCandidateWith(candidate: string, exts: string[], indexNames: string[]): string | null {
   try {
     const stat = fs.statSync(candidate);
     if (stat.isFile()) return candidate;
   } catch { /* not found */ }
 
-  for (const ext of SRC_EXTS) {
+  for (const ext of exts) {
     const p = candidate + ext;
     if (fs.existsSync(p)) return p;
   }
-  for (const ext of SRC_EXTS) {
-    const p = path.join(candidate, `index${ext}`);
+  for (const name of indexNames) {
+    const p = path.join(candidate, name);
     if (fs.existsSync(p)) return p;
   }
   return null;
+}
+
+/**
+ * Resolve an import in a path-based language (TS/JS/Python/Ruby) to an
+ * absolute file path: relative imports resolve directly; bare specifiers try
+ * language-specific conventions (Python absolute dotted imports, Ruby
+ * lib/app-relative requires) before falling back to TS path-aliases /
+ * monorepo workspace packages.
+ */
+export function resolvePathBasedImport(
+  importFrom: string,
+  fromAbs: string,
+  root: string,
+  language: string,
+): string | null {
+  if (importFrom.startsWith(".")) return resolveImportPath(importFrom, fromAbs, language);
+  if (language === "python") {
+    const abs = resolvePythonAbsoluteImport(importFrom, root);
+    if (abs) return abs;
+  }
+  if (language === "ruby") {
+    const abs = resolveRubyBareRequire(importFrom, root);
+    if (abs) return abs;
+  }
+  return resolveAliasedImport(importFrom, fromAbs) ?? resolveWorkspaceImportCached(importFrom, root);
 }
 
 /**
@@ -124,9 +167,9 @@ export async function getOrBuildCrossLangIndex(root: string): Promise<CrossLangI
     const skels: SkeletonFile[] = [];
     for (const abs of files) {
       const ext = path.extname(abs).toLowerCase();
-      // Only Java/C# contribute to the index (Rust resolves via direct
-      // module-path walk against the filesystem, no index needed).
-      if (ext !== ".java" && ext !== ".cs" && ext !== ".kt" && ext !== ".kts" && ext !== ".swift") continue;
+      // Only FQCN/namespace-indexed languages contribute (Rust/Go/C/C++
+      // resolve via direct filesystem walks, no index needed).
+      if (ext !== ".java" && ext !== ".cs" && ext !== ".kt" && ext !== ".kts" && ext !== ".swift" && ext !== ".php") continue;
       const rel = path.relative(key, abs).split(path.sep).join("/");
       try {
         skels.push(await buildSkeleton(abs, rel, opts));
@@ -180,12 +223,10 @@ async function enrichRelativeImport(
   imp: ImportRef,
   fromAbs: string,
   root: string,
+  language: string,
 ): Promise<ResolvedImport> {
   const isBare = !imp.from.startsWith(".");
-  // Relative import → path resolve; bare specifier → try monorepo workspace.
-  let resolvedAbs = isBare ? null : resolveImportPath(imp.from, fromAbs);
-  if (!resolvedAbs && isBare) resolvedAbs = resolveAliasedImport(imp.from, fromAbs);
-  if (!resolvedAbs && isBare) resolvedAbs = resolveWorkspaceImportCached(imp.from, root);
+  const resolvedAbs = resolvePathBasedImport(imp.from, fromAbs, root, language);
   const treatedExternal = isBare && !resolvedAbs;
   const resolvedRel = resolvedAbs
     ? path.relative(root, resolvedAbs).split(path.sep).join("/")
@@ -249,7 +290,7 @@ function assembleResolved(
 
 /* ─── Public entry point ──────────────────────────────────────────────────── */
 
-const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp", "swift"]);
+const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp", "swift", "php"]);
 
 export async function resolveFileImports(
   skel: SkeletonFile,
@@ -269,7 +310,7 @@ export async function resolveFileImports(
     if (CROSS_LANG.has(skel.language)) {
       results.push(await enrichCrossLangImport(imp, skel, absPath, root, await getIndex()));
     } else {
-      results.push(await enrichRelativeImport(imp, absPath, root));
+      results.push(await enrichRelativeImport(imp, absPath, root, skel.language));
     }
   }
 

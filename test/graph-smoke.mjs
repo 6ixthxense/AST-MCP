@@ -149,6 +149,53 @@ console.log("\nSwift (import <Module> → module files)");
       && e.to === "Sources/Inventory/Inventory.swift"));
 }
 
+// ─── PHP (namespace FQCN) ───────────────────────────────────────────────
+console.log("\nPHP (use App\\Models\\X → namespace FQCN)");
+{
+  const root = path.join(fixtures, "php");
+  const { graph, skels } = await buildGraph(root, [
+    "src/Inventory.php",
+    "src/InventoryService.php",
+  ]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges));
+  const invSkel = skels.find(s => s.file === "src/Inventory.php");
+  check("PHP: namespace directive captured", invSkel?.directives?.includes("namespace:App\\Models") === true);
+  check("PHP: at least one import edge", importEdges.length > 0);
+  check("PHP: InventoryService.php -> Inventory.php::Inventory (symbol-level)",
+    importEdges.some(e =>
+      e.from === "src/InventoryService.php" &&
+      e.to === "src/Inventory.php::Inventory"));
+}
+
+// ─── Ruby (require_relative → file-level edge) ─────────────────────────
+console.log("\nRuby (require_relative → file-level edge)");
+{
+  const root = path.join(fixtures, "ruby");
+  const { graph } = await buildGraph(root, ["lib/inventory.rb", "lib/service.rb"]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges));
+  check("Ruby: at least one import edge", importEdges.length > 0);
+  check("Ruby: service.rb -> inventory.rb (file-level, require has no named symbol)",
+    importEdges.some(e => e.from === "lib/service.rb" && e.to === "lib/inventory.rb"));
+}
+
+// ─── Python (relative + absolute cross-file imports) ───────────────────
+console.log("\nPython (relative + absolute dotted imports)");
+{
+  const root = path.join(fixtures, "python");
+  const { graph } = await buildGraph(root, [
+    "pkg/__init__.py",
+    "pkg/models.py",
+    "pkg/service.py",
+  ]);
+  const importEdges = graph.edges.filter(e => e.edgeType === "imports");
+  console.log("    import edges:", JSON.stringify(importEdges));
+  check("Python: at least one import edge", importEdges.length > 0);
+  check("Python: service.py -> models.py::Inventory (relative `from .models import`)",
+    importEdges.some(e => e.from === "pkg/service.py" && e.to === "pkg/models.py::Inventory"));
+}
+
 // ─── Monorepo cross-package edges ──────────────────────────────────────
 console.log("\nMonorepo (cross-package symbol-graph edges)");
 {

@@ -147,6 +147,17 @@ function handle(node: TSNode): SymbolNode | null {
   }
 }
 
+// ─── Directives (namespace declaration) ───────────────────────────────────────
+
+export function extractDirectivesPhp(root: TSNode, _source: string): string[] {
+  for (const child of namedChildren(root)) {
+    if (child.type !== "namespace_definition") continue;
+    const name = (nameOf(child)?.replace(/\s+/g, "") ?? namespaceName(child))?.replace(/^\\+/, "");
+    if (name) return [`namespace:${name}`];
+  }
+  return [];
+}
+
 // ─── Import extraction ────────────────────────────────────────────────────────
 // `use App\Models\User;`, grouped `use App\{A, B};`, and require/include calls.
 

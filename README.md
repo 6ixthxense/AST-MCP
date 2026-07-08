@@ -12,23 +12,25 @@ Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars. Zero regex
 |--------------------------|:-----:|:------:|:---:|:----:|:----:|:---:|:---:|:---:|:---:|:-----:|:---:|:----:|
 | Symbol extraction        | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | ✅  | ✅   |
 | Imports parsing          | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | ✅  | ✅   |
-| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | —   | —    |
-| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | —   | —    |
-| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     | —   | —    |
-| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     | —   | —    |
+| Graph `imports` edges    | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | ✅  | ✅   |
+| `resolve_imports` enrich | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | ✅  | ✅  | ✅  | ✅    | ✅  | ✅   |
+| Call graph callee origin | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     | ✅  | —    |
+| Reverse `calledBy`       | ✅    | ✅     | ✅  | ✅   | ✅   | ✅  | —   | —   | ✅  | —     | ✅  | ✅   |
 
-> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. (PHP & Ruby landed in v1.22.0 — symbol extraction + imports; cross-file graph wiring for them is the next step. Ruby was unblocked by upgrading `web-tree-sitter` to 0.21.0.)
+> As of v0.8.2, all four v0.8.0 languages have **cross-file graph + resolver** wiring: Kotlin (FQCN/package index), C/C++ (`#include` with header↔impl pairing), and Swift (module = directory under `Sources/`). Call-graph callee origin is resolved for Kotlin; for C/C++/Swift it stays limited because their imports don't name individual symbols. PHP & Ruby landed symbol extraction + imports in v1.22.0; **cross-file graph + call-graph wiring landed after** — PHP via a namespace-FQCN index (mirrors Java/Kotlin: `namespace X;` + class/interface/trait/enum name → file), Ruby via `require_relative`/`require` path resolution (Ruby's imports never name a symbol, so callee-origin resolution stays limited like C/C++/Swift, but reverse `calledBy` uses the same call-site-scan fallback as C#/Go).
 
 Each language uses the resolution strategy that fits it:
-- **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting. **Path aliases** (`@/*` etc.) resolve via the nearest `tsconfig.json`/`jsconfig.json` (`paths` + `baseUrl`, relative `extends`). *(v1.24.0)*
+- **TS/JS/Python** — relative paths (`./foo`, `..mod`) resolved against the importing file's directory, with TS-ESM `.js` → `.ts` rewriting. **Path aliases** (`@/*` etc.) resolve via the nearest `tsconfig.json`/`jsconfig.json` (`paths` + `baseUrl`, relative `extends`). Python also resolves absolute dotted imports (`from pkg.mod import X`) against the project root and a conventional `src/` layout. *(v1.24.0)*
 - **Go** — `go.mod` ancestor lookup → module path prefix → package directory → all `.go` files (skips `_test.go`).
 - **Rust** — `Cargo.toml` ancestor → `crate::` / `self::` / `super::` walks; supports `mod.rs` + Rust-2018 sibling-dir style.
 - **Java** — project-wide FQCN index (`package + "." + className → file`) built lazily on first cross-lang call; supports wildcard imports.
 - **C#** — namespace-to-files index plus a `<ns>.<TypeName>` index so `using App.Models` + `new Inventory()` resolves to the right file.
 - **Kotlin** — project-wide FQCN index (`package + "." + ClassName → file`), like Java; wildcard `import pkg.*` pulls every file in the package.
 - **C / C++** — `#include "..."` resolved against the including file's directory; headers auto-paired with same-name `.c`/`.cpp`/`.cc`/`.cxx` impl files. `<system>` includes stay external.
+- **PHP** — project-wide namespace-FQCN index (`namespace + "\\" + ClassName → file`), like Java/Kotlin; `use App\Models\User;` resolves directly.
+- **Ruby** — `require_relative './x'` resolved as a relative path (`.rb` + no index-file convention); bare `require 'foo/bar'` tried against `lib/`, `app/`, and the project root (gem requires naturally miss and stay external).
 
-For C# and Go (where imports don't name the called symbol), reverse `calledBy` falls back to **call-site scanning** of candidate files.
+For C#, Go, and Ruby (where imports don't name the called symbol), reverse `calledBy` falls back to **call-site scanning** of candidate files.
 
 ---
 
@@ -525,8 +527,8 @@ Parse a function body → extract every call expression, resolve callees via the
 }
 ```
 
-Supports all 8 languages with per-language call extraction (TS/JS `member_expression`, Rust `field_expression`/`scoped_identifier`, Java `method_invocation`, C# `invocation_expression`, etc.) and constructor calls (`new Foo`).  
-Handles TS/JS destructured aliases (`const { sign } = jwt`), Java FQCN imports, C# `using` namespaces (via project-wide type index), Rust `use crate::path::Item`, Go `pkg.Func` (via go.mod module path), Kotlin FQCN/package imports, C/C++ `#include`, and Swift module imports (`import <Module>` → files under `Sources/<Module>/`). Reverse `calledBy` uses call-site scanning for C# and Go where import statements don't name the called symbol.
+Supports all languages with per-language call extraction (TS/JS `member_expression`, Rust `field_expression`/`scoped_identifier`, Java `method_invocation`, C# `invocation_expression`, PHP `member_call_expression`/`scoped_call_expression`/`function_call_expression`, Ruby `call` via its `receiver`/`method` fields, etc.) and constructor calls (`new Foo`).  
+Handles TS/JS destructured aliases (`const { sign } = jwt`), Java FQCN imports, C# `using` namespaces (via project-wide type index), Rust `use crate::path::Item`, Go `pkg.Func` (via go.mod module path), Kotlin FQCN/package imports, C/C++ `#include`, Swift module imports (`import <Module>` → files under `Sources/<Module>/`), and PHP `use App\Models\X` (namespace-FQCN index). Reverse `calledBy` uses call-site scanning for C#, Go, and Ruby where import statements don't name the called symbol.
 
 **Params:** `path`, `function`, `scanDir`
 

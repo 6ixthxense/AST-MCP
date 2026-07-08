@@ -5,7 +5,7 @@ import type { TSNode } from "./parser.js";
 import { buildSkeleton } from "./skeleton.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
 import { detectLanguage } from "./registry.js";
-import { resolveImportPath, resolveAliasedImport, getOrBuildCrossLangIndex } from "./resolver.js";
+import { resolveImportPath, resolveAliasedImport, resolvePathBasedImport, getOrBuildCrossLangIndex } from "./resolver.js";
 import { resolveCrossLangTarget } from "./crosslang.js";
 import type { ImportRef, SkeletonFile } from "./types.js";
 
@@ -33,7 +33,7 @@ export interface CallGraphResult {
   calledBy: CalledByRef[];
 }
 
-const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp", "swift"]);
+const CROSS_LANG = new Set(["java", "csharp", "rust", "go", "kotlin", "c", "cpp", "swift", "php"]);
 
 // ─── Call extraction ──────────────────────────────────────────────────────────
 
@@ -87,15 +87,23 @@ function collectCalls(node: TSNode, out: RawCall[]): void {
       }
       pushCall(out, callee, fn);
     } else {
-      // Kotlin: call_expression has no `function` field — the callee is the
-      // first named child (a simple_identifier for `Foo(...)` / a bare call,
-      // or a navigation_expression for `obj.method(...)`).
-      const callee0 = node.namedChild(0);
-      if (callee0) {
-        if (callee0.type === "simple_identifier" || callee0.type === "identifier") {
-          pushCall(out, callee0.text, callee0);
-        } else if (callee0.type === "navigation_expression") {
-          pushCall(out, callee0.text.replace(/\s+/g, ""), callee0);
+      // Ruby: "call" has no `function` field but does have `method`
+      // (+ optional `receiver`) — `u.save` / `User.new` / `self.qux`.
+      const rubyMethod = node.childForFieldName("method");
+      if (rubyMethod) {
+        const receiver = node.childForFieldName("receiver");
+        pushCall(out, receiver ? `${receiver.text}.${rubyMethod.text}` : rubyMethod.text, rubyMethod);
+      } else {
+        // Kotlin: call_expression has no `function` field — the callee is the
+        // first named child (a simple_identifier for `Foo(...)` / a bare call,
+        // or a navigation_expression for `obj.method(...)`).
+        const callee0 = node.namedChild(0);
+        if (callee0) {
+          if (callee0.type === "simple_identifier" || callee0.type === "identifier") {
+            pushCall(out, callee0.text, callee0);
+          } else if (callee0.type === "navigation_expression") {
+            pushCall(out, callee0.text.replace(/\s+/g, ""), callee0);
+          }
         }
       }
     }
@@ -114,7 +122,27 @@ function collectCalls(node: TSNode, out: RawCall[]): void {
     if (fn) pushCall(out, fn.text, fn);
   }
 
-  // ── Java + C# constructor call: new Foo(...)
+  // ── PHP: $obj->method(...)
+  else if (t === "member_call_expression") {
+    const name = node.childForFieldName("name");
+    const obj = node.childForFieldName("object");
+    if (name) pushCall(out, obj ? `${obj.text.replace(/^\$/, "")}.${name.text}` : name.text, name);
+  }
+
+  // ── PHP: Class::method(...) / self::method(...) / parent::method(...)
+  else if (t === "scoped_call_expression") {
+    const name = node.childForFieldName("name");
+    const scope = node.childForFieldName("scope");
+    if (name) pushCall(out, scope ? `${scope.text}::${name.text}` : name.text, name);
+  }
+
+  // ── PHP: helper(...) (no receiver)
+  else if (t === "function_call_expression") {
+    const fn = node.childForFieldName("function");
+    if (fn) pushCall(out, fn.text, fn);
+  }
+
+  // ── Java + C# + PHP constructor call: new Foo(...)
   else if (t === "object_creation_expression") {
     let typeNode: TSNode | null = node.childForFieldName("type");
     if (!typeNode) {
@@ -126,7 +154,8 @@ function collectCalls(node: TSNode, out: RawCall[]): void {
             c.type === "type_identifier" ||
             c.type === "scoped_identifier" ||
             c.type === "qualified_name" ||
-            c.type === "generic_type")
+            c.type === "generic_type" ||
+            c.type === "name") // PHP: `new User()` names the type via a bare `name` node
         ) {
           typeNode = c;
           break;
@@ -152,9 +181,11 @@ const FUNCTION_NODE_TYPES = new Set([
   "abstract_method_signature",
   "function_definition",         // Python
   "async_function_definition",   // Python async
-  "method_declaration",          // Go / Java / C#
+  "method_declaration",          // Go / Java / C# / PHP
   "constructor_declaration",     // Java / C#
   "function_item",               // Rust
+  "method",                      // Ruby
+  "singleton_method",            // Ruby: def self.foo
 ]);
 
 function findFunctionNode(root: TSNode, name: string): TSNode | null {
@@ -168,6 +199,9 @@ function findFunctionNode(root: TSNode, name: string): TSNode | null {
         const id = node.namedChild(0);
         if (id?.type === "simple_identifier" && id.text === name) return node;
       }
+      // Ruby: singleton methods are listed as "self.foo" (see extractRuby)
+      // but the node's own `name` field is just "foo".
+      if (node.type === "singleton_method" && named && `self.${named.text}` === name) return node;
     }
     // const foo = () => ... | const foo = function() ...
     if (node.type === "variable_declarator") {
@@ -358,16 +392,11 @@ export async function buildCallGraph(
           call.isExternal = true;
           call.calleeFileRel = importRef.from;
         }
-      } else if (importRef.from.startsWith(".")) {
-        const resolvedAbs = resolveImportPath(importRef.from, filePath);
+      } else {
+        const resolvedAbs = resolvePathBasedImport(importRef.from, filePath, root, skel.language);
         if (resolvedAbs) {
           call.calleeFileRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
-        }
-      } else {
-        const aliasAbs = resolveAliasedImport(importRef.from, filePath);
-        if (aliasAbs) {
-          call.calleeFileRel = path.relative(root, aliasAbs).split(path.sep).join("/");
-        } else {
+        } else if (!importRef.from.startsWith(".")) {
           call.isExternal = true;
           call.calleeFileRel = importRef.from;
         }
@@ -434,9 +463,7 @@ export async function buildCallGraph(
             break;
           }
         } else {
-          const resolvedAbs = imp.from.startsWith(".")
-            ? resolveImportPath(imp.from, otherAbs)
-            : resolveAliasedImport(imp.from, otherAbs);
+          const resolvedAbs = resolvePathBasedImport(imp.from, otherAbs, root, otherSkel.language);
           if (!resolvedAbs) continue;
           const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
           if (resolvedRel === relPath) {
@@ -478,6 +505,34 @@ export async function buildCallGraph(
         }
       }
       if (!importsUs) continue;
+
+      if (await fileCallsSymbol(otherAbs, funcName)) {
+        calledBy.push({ file: otherSkel.file });
+        seenFiles.add(otherSkel.file);
+      }
+    }
+  }
+
+  // Extra pass: Ruby's `require`/`require_relative` never names the symbol
+  // it needs (imp.symbol is always "*"), so the generic calledBy loop above
+  // never matches. Scan call sites of any Ruby file that requires this one.
+  if (allSkeletons && skel.language === "ruby") {
+    const seenFiles = new Set(calledBy.map((c) => c.file));
+    for (const otherSkel of allSkeletons) {
+      if (otherSkel.file === relPath || otherSkel.language !== "ruby") continue;
+      if (seenFiles.has(otherSkel.file)) continue;
+      const otherAbs = path.resolve(root, otherSkel.file);
+
+      let requiresUs = false;
+      for (const imp of otherSkel.imports ?? []) {
+        const resolvedAbs = resolvePathBasedImport(imp.from, otherAbs, root, "ruby");
+        if (!resolvedAbs) continue;
+        if (path.relative(root, resolvedAbs).split(path.sep).join("/") === relPath) {
+          requiresUs = true;
+          break;
+        }
+      }
+      if (!requiresUs) continue;
 
       if (await fileCallsSymbol(otherAbs, funcName)) {
         calledBy.push({ file: otherSkel.file });

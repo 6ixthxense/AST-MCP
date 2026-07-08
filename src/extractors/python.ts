@@ -122,13 +122,19 @@ function parseFromImport(node: TSNode, out: ImportRef[]): void {
 
   for (let i = 0; i < node.namedChildCount; i++) {
     const c = node.namedChild(i);
-    if (!c || c === moduleNode) continue;
+    // `web-tree-sitter` returns a fresh wrapper object per accessor call, so
+    // `c === moduleNode` is unreliable — compare by source span instead.
+    if (!c || (moduleNode && c.startIndex === moduleNode.startIndex && c.endIndex === moduleNode.endIndex)) continue;
 
     if (c.type === "wildcard_import") {
       out.push({ symbol: "*", from, isNamespaceImport: true });
-    } else if (c.type === "relative_import" || c.type === "dotted_name") {
-      // skip — these are part of the module path, not the imported names
-    } else if (c.type === "identifier") {
+    } else if (c.type === "relative_import") {
+      // skip — dots-only module path (`from . import x`), not an imported name
+    } else if (c.type === "identifier" || c.type === "dotted_name") {
+      // A bare imported name is wrapped in `dotted_name` by the grammar just
+      // like the module path is — `c !== moduleNode` (checked above) is what
+      // actually distinguishes "from pkg import a, b" siblings from the
+      // module itself, not the node type.
       out.push({ symbol: c.text, from });
     } else if (c.type === "aliased_import") {
       const nameNode = c.childForFieldName("name");
