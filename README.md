@@ -37,6 +37,13 @@ For C#, Go, and Ruby (where imports don't name the called symbol), reverse `call
 ## Quick Start
 
 ```bash
+# Try it on any repo without installing
+npx -p universal-ast-mapper ast-map report src/
+
+# Or install the CLI
+npm install -g universal-ast-mapper
+
+# From a clone
 npm install && npm run build
 
 # CLI
