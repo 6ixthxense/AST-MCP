@@ -19,10 +19,6 @@ export interface ExtractedScript {
 
 const SCRIPT_RE = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
 
-export function isSfcExt(ext: string): boolean {
-  return ext === ".vue" || ext === ".svelte";
-}
-
 export function extractScript(source: string): ExtractedScript {
   // Start from an all-blank canvas the same shape as the source (newlines kept,
   // every other character turned into a space) to preserve line/column offsets.

@@ -43,12 +43,6 @@ export function findRelatedSymbols(
 
 // ─── Architecture validation ──────────────────────────────────────────────────
 
-/** True if the first 500 chars of source contain the given directive literal. */
-export function hasDirective(source: string, directive: string): boolean {
-  const head = source.slice(0, 500);
-  return head.includes(`"${directive}"`) || head.includes(`'${directive}'`);
-}
-
 interface ServerPattern { pattern: RegExp; label: string }
 
 /** Patterns that flag server-only imports in a "use client" file. */

@@ -276,7 +276,7 @@ function packageEntry(pkgDir: string, pkg: any): string | null {
  * a workspace package. Handles exact package imports (`@org/utils`) and subpaths
  * (`@org/utils/helpers`). Returns null for non-workspace (external) specifiers.
  */
-export function resolveWorkspaceImport(
+function resolveWorkspaceImport(
   importFrom: string,
   rootAbs: string,
   info: WorkspaceInfo,

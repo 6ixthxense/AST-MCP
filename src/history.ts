@@ -19,7 +19,7 @@ export interface HistoryEntry {
 
 const HISTORY_SUBPATH = ".ast-map/history.json";
 
-export function historyPath(root: string): string {
+function historyPath(root: string): string {
   return path.join(root, HISTORY_SUBPATH);
 }
 

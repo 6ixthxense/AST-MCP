@@ -193,7 +193,7 @@ function walkRustModule(base: string, segs: string[]): string | null {
  * @param fromAbs   Absolute path of the importing file
  * @param projectRoot Absolute project root (security boundary)
  */
-export function resolveRustModule(
+function resolveRustModule(
   importFrom: string,
   fromAbs: string,
   projectRoot: string,
@@ -292,7 +292,7 @@ function findGoModule(fromAbs: string, projectRoot: string): GoModule | null {
  *   - `import "github.com/x/y/z"` maps to <moduleDir>/<subpath> when the prefix
  *     matches the current module's path.
  */
-export function resolveGoImport(
+function resolveGoImport(
   importFrom: string,
   fromAbs: string,
   projectRoot: string,
@@ -332,12 +332,6 @@ export function resolveGoImport(
   return files.length > 0 ? files : null;
 }
 
-/** Test/debug hook: drop the cached Go module info. */
-export function clearGoModuleCache(): void {
-  goModuleCache.clear();
-}
-
-
 /* ─── C / C++ #include resolution ─────────────────────────────────────────── */
 
 const HEADER_EXTS = [".h", ".hpp", ".hxx", ".hh"];
@@ -349,7 +343,7 @@ const IMPL_EXTS = [".c", ".cpp", ".cc", ".cxx"];
  * graph captures the header → impl relationship.
  * `#include <foo.h>` (system headers) returns null (external).
  */
-export function resolveCInclude(
+function resolveCInclude(
   importFrom: string,
   fromAbs: string,
   projectRoot: string,

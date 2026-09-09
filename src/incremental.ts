@@ -27,7 +27,7 @@ export interface ChangedFiles {
 
 const STATE_FILE = ".ast-map/incremental.json";
 
-export function statePath(root: string): string {
+function statePath(root: string): string {
   return path.join(root, STATE_FILE);
 }
 
@@ -102,28 +102,9 @@ export function detectChanges(
  * Get files changed relative to a git ref (e.g. "HEAD", "main", "origin/main").
  * Returns absolute paths of changed/added/modified files (excludes deleted).
  */
-export function gitChangedFiles(root: string, base = "HEAD"): string[] {
+function gitChangedFiles(root: string, base = "HEAD"): string[] {
   try {
     const raw = execSync(`git diff --name-only --diff-filter=ACM ${base}`, {
-      cwd: root,
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    return raw
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((rel) => path.resolve(root, rel))
-      .filter((abs) => fs.existsSync(abs));
-  } catch { return []; }
-}
-
-/**
- * Get files staged for commit (git index).
- */
-export function gitStagedFiles(root: string): string[] {
-  try {
-    const raw = execSync("git diff --cached --name-only --diff-filter=ACM", {
       cwd: root,
       encoding: "utf8",
       timeout: 10_000,
