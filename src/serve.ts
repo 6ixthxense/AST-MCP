@@ -54,6 +54,181 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+/**
+ * The command surface behind POST /api/run. At module scope, not nested in
+ * startServe: these are two jobs — mapping a command name to a value, and
+ * dealing in requests and responses — and only a real separation makes the
+ * second one readable (or measurable: complexity.ts attributes a nested
+ * function's control flow to whatever encloses it).
+ */
+async function runCommand(
+  cmd: string,
+  args: Record<string, unknown>,
+  skeletons: SkeletonFile[],
+  graph: ReturnType<typeof buildSymbolGraph>,
+  root: string,
+  scanDir: string,
+): Promise<unknown> {
+  let data: unknown;
+  switch (cmd) {
+      case "dead":
+        data = findDeadExports(graph);
+        break;
+      case "cycles":
+        data = findCircularDeps(graph);
+        break;
+      case "duplicates":
+        data = findDuplicateSymbols(graph);
+        break;
+      case "top":
+        data = getTopSymbols(graph, (args.limit as number) ?? 20);
+        break;
+      case "similar":
+        data = findSimilar(skeletons, { minGroupSize: (args.minGroupSize as number) ?? 2 });
+        break;
+      case "smells": {
+        const all: SmellResult[] = [];
+        for (const skel of skeletons) {
+          const fileAbs = path.resolve(root, skel.file);
+          try {
+            const cached = acGet<SmellResult[]>(fileAbs + "\0smells");
+            if (cached) { all.push(...cached); continue; }
+            const src = fs.readFileSync(fileAbs, "utf8");
+            const s = detectSmells(skel, src.split("\n").length);
+            acPut(fileAbs, "smells", s);
+            all.push(...s);
+          } catch { /* skip */ }
+        }
+        data = all;
+        break;
+      }
+      case "security": {
+        const all: ReturnType<typeof scanFileForSecurityIssues> = [];
+        for (const skel of skeletons) {
+          const fileAbs = path.resolve(root, skel.file);
+          try {
+            const cached = acGet<ReturnType<typeof scanFileForSecurityIssues>>(fileAbs + "\0security");
+            if (cached) { all.push(...cached); continue; }
+            const src = fs.readFileSync(fileAbs, "utf8");
+            const issues = scanFileForSecurityIssues(src, skel.file);
+            acPut(fileAbs, "security", issues);
+            all.push(...issues);
+          } catch { /* skip */ }
+        }
+        data = all;
+        break;
+      }
+      case "complexity": {
+        const results = [];
+        for (const skel of skeletons) {
+          try {
+            results.push(await computeFileComplexity(path.resolve(root, skel.file), skel.file));
+          } catch { /* skip */ }
+        }
+        data = results;
+        break;
+      }
+      case "find": {
+        if (!args.query) throw new Error("query required");
+        data = await searchSymbols(scanDir, args.query as string, root, {
+          matchType: (args.matchType as "exact" | "contains" | "regex") ?? "contains",
+          kind: args.kind as string | undefined,
+        });
+        break;
+      }
+      case "impact": {
+        if (!args.symbol) throw new Error("symbol required");
+        data = getChangeImpact(graph, args.symbol as string);
+        break;
+      }
+      case "fileDeps": {
+        if (!args.file) throw new Error("file required");
+        data = getFileDeps(graph, args.file as string);
+        break;
+      }
+      case "explain": {
+        if (!args.file || !args.symbol) throw new Error("file and symbol required");
+        const skel = skeletons.find(
+          (s) => s.file === args.file || s.file.endsWith(args.file as string)
+        );
+        if (!skel) throw new Error(`File not found: ${args.file}`);
+        const nodeId = `${skel.file}::${args.symbol}`;
+        const impact = getChangeImpact(graph, nodeId);
+        data = buildExplainResult(args.symbol as string, skel, graph, impact, []);
+        break;
+      }
+      case "arch": {
+        const cfg = loadProjectConfig(root);
+        const rules = loadArchRules(cfg);
+        data = checkArchRules(graph, rules);
+        break;
+      }
+      case "diagram": {
+        const type = (args.type as string) ?? "deps";
+        if (type === "class") data = buildClassDiagram(skeletons);
+        else if (type === "modules") data = buildModulesDiagram(graph);
+        else data = buildDepsDiagram(graph, (args.maxNodes as number) ?? 50);
+        break;
+      }
+      case "doc": {
+        const docOut = buildDocOutput(skeletons, { exportedOnly: (args.exportedOnly as boolean) ?? false });
+        data = {
+          markdown: renderMarkdown(docOut),
+          files: docOut.files.length,
+          symbols: docOut.files.reduce((a: number, f) => a + f.symbols.length, 0),
+        };
+        break;
+      }
+      case "pr_diff": {
+        if (!isGitRepo(root)) throw new Error("Not a git repository.");
+        const baseRef = (args.base as string) ?? "main";
+        const diff = await computeDiff(scanDir, root, baseRef);
+        const smellsOptsPR = resolveOptions({ detail: "full", emitHtml: false });
+        const pSmells: SmellResult[] = [];
+        const pSec: ReturnType<typeof scanFileForSecurityIssues> = [];
+        for (const fd of diff.files) {
+          if (fd.status === "deleted") continue;
+          const fileAbs = path.resolve(root, fd.file);
+          try {
+            const cached = acGet<SmellResult[]>(fileAbs + "\0smells");
+            if (cached) { pSmells.push(...cached); }
+            else {
+              const skel = await buildSkeleton(fileAbs, fd.file, smellsOptsPR);
+              const lc = fs.readFileSync(fileAbs, "utf8").split("\n").length;
+              const s = detectSmells(skel, lc, {});
+              acPut(fileAbs, "smells", s);
+              pSmells.push(...s);
+            }
+          } catch { /* skip */ }
+          try {
+            const cachedSec = acGet<ReturnType<typeof scanFileForSecurityIssues>>(fileAbs + "\0security");
+            if (cachedSec) { pSec.push(...cachedSec); }
+            else {
+              const src = fs.readFileSync(fileAbs, "utf8");
+              const issues = scanFileForSecurityIssues(src, fd.file);
+              acPut(fileAbs, "security", issues);
+              pSec.push(...issues);
+            }
+          } catch { /* skip */ }
+        }
+        data = {
+          base: baseRef,
+          summary: { ...diff.summary, smells: pSmells.length, securityIssues: pSec.length },
+          breaking: diff.breaking,
+          impactedFiles: diff.impactedFiles,
+          files: diff.files,
+          smells: pSmells.slice(0, 50),
+          security: pSec.slice(0, 50),
+        };
+        break;
+      }
+      default:
+        throw new Error(`Unknown command: ${cmd}`);
+    }
+  return data;
+}
+
+
 export async function startServe(opts: ServeOptions): Promise<http.Server> {
   const root = opts.root;
   const scanDir = opts.scanDir ?? root;
@@ -95,6 +270,45 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
     return skeletons;
   }
 
+  /**
+   * One pass over the sources for the analyses that need the file text rather
+   * than the skeleton: /api/report, /api/smells and /api/security each used to
+   * read every file themselves.
+   */
+  async function scanSources(): Promise<{
+    smells: ReturnType<typeof detectSmells>;
+    security: ReturnType<typeof scanFileForSecurityIssues>;
+  }> {
+    const smells: ReturnType<typeof detectSmells> = [];
+    const security: ReturnType<typeof scanFileForSecurityIssues> = [];
+    for (const skel of await getSkeletons()) {
+      try {
+        const src = fs.readFileSync(path.resolve(root, skel.file), "utf8");
+        smells.push(...detectSmells(skel, src.split("\n").length));
+        security.push(...scanFileForSecurityIssues(src, skel.file));
+      } catch { /* unreadable file — skip */ }
+    }
+    return { smells, security };
+  }
+
+  const graphOf = async () => buildSymbolGraph(await getSkeletons(), root);
+
+  /** Read-only JSON endpoints: pathname -> the value to send. */
+  const jsonRoutes: Record<string, () => Promise<unknown>> = {
+    "/api/report": async () => {
+      const [report, scanned] = await Promise.all([buildReport(scanDir, root), scanSources()]);
+      return { ...report, smells: scanned.smells, security: scanned.security, history: loadHistory(root) };
+    },
+    "/api/graph": graphOf,
+    "/api/dead": async () => findDeadExports(await graphOf()),
+    "/api/top": async () => getTopSymbols(await graphOf(), 20),
+    "/api/cycles": async () => findCircularDeps(await graphOf()),
+    "/api/history": async () => loadHistory(root),
+    "/api/skeletons": getSkeletons,
+    "/api/smells": async () => (await scanSources()).smells,
+    "/api/security": async () => (await scanSources()).security,
+  };
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
     const pathname = url.pathname;
@@ -116,75 +330,6 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
         return;
       }
 
-      if (pathname === "/api/report") {
-        const skeletons = await getSkeletons();
-        const graph = buildSymbolGraph(skeletons, root);
-        const history = loadHistory(root);
-        const report = await buildReport(scanDir, root);
-        const smellsAll: ReturnType<typeof detectSmells> = [];
-        const securityAll: ReturnType<typeof scanFileForSecurityIssues> = [];
-        for (const skel of skeletons) {
-          const fileAbs = path.resolve(root, skel.file);
-          try {
-            const src = fs.readFileSync(fileAbs, "utf8");
-            smellsAll.push(...detectSmells(skel, src.split("\n").length));
-            securityAll.push(...scanFileForSecurityIssues(src, skel.file));
-          } catch { /* skip */ }
-        }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ...report, smells: smellsAll, security: securityAll, history }, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/graph") {
-        const skeletons = await getSkeletons();
-        const graph = buildSymbolGraph(skeletons, root);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(graph, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/dead") {
-        const skeletons = await getSkeletons();
-        const graph = buildSymbolGraph(skeletons, root);
-        const dead = findDeadExports(graph);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(dead, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/top") {
-        const skeletons = await getSkeletons();
-        const graph = buildSymbolGraph(skeletons, root);
-        const top = getTopSymbols(graph, 20);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(top, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/cycles") {
-        const skeletons = await getSkeletons();
-        const graph = buildSymbolGraph(skeletons, root);
-        const cycles = findCircularDeps(graph);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(cycles, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/history") {
-        const history = loadHistory(root);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(history, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/skeletons") {
-        const skeletons = await getSkeletons();
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(skeletons, null, 2));
-        return;
-      }
-
       if (pathname === "/events") {
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
@@ -198,33 +343,12 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
         return;
       }
 
-      if (pathname === "/api/smells") {
-        const skeletons = await getSkeletons();
-        const all: ReturnType<typeof detectSmells> = [];
-        for (const skel of skeletons) {
-          const fileAbs = path.resolve(root, skel.file);
-          try {
-            const src = fs.readFileSync(fileAbs, "utf8");
-            all.push(...detectSmells(skel, src.split("\n").length));
-          } catch { /* skip */ }
-        }
+      // Every read-only endpoint is "produce a value, send it as JSON" — the
+      // table says which value, one place does the serialising.
+      const produce = jsonRoutes[pathname];
+      if (produce) {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(all, null, 2));
-        return;
-      }
-
-      if (pathname === "/api/security") {
-        const skeletons = await getSkeletons();
-        const all: ReturnType<typeof scanFileForSecurityIssues> = [];
-        for (const skel of skeletons) {
-          const fileAbs = path.resolve(root, skel.file);
-          try {
-            const src = fs.readFileSync(fileAbs, "utf8");
-            all.push(...scanFileForSecurityIssues(src, skel.file));
-          } catch { /* skip */ }
-        }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(all, null, 2));
+        res.end(JSON.stringify(await produce(), null, 2));
         return;
       }
 
@@ -233,163 +357,7 @@ export async function startServe(opts: ServeOptions): Promise<http.Server> {
         const { cmd, args = {} } = JSON.parse(body) as { cmd: string; args: Record<string, unknown> };
         const skeletons = await getSkeletons();
         const graph = buildSymbolGraph(skeletons, root);
-        let data: unknown;
-
-        switch (cmd) {
-          case "dead":
-            data = findDeadExports(graph);
-            break;
-          case "cycles":
-            data = findCircularDeps(graph);
-            break;
-          case "duplicates":
-            data = findDuplicateSymbols(graph);
-            break;
-          case "top":
-            data = getTopSymbols(graph, (args.limit as number) ?? 20);
-            break;
-          case "similar":
-            data = findSimilar(skeletons, { minGroupSize: (args.minGroupSize as number) ?? 2 });
-            break;
-          case "smells": {
-            const all: SmellResult[] = [];
-            for (const skel of skeletons) {
-              const fileAbs = path.resolve(root, skel.file);
-              try {
-                const cached = acGet<SmellResult[]>(fileAbs + "\0smells");
-                if (cached) { all.push(...cached); continue; }
-                const src = fs.readFileSync(fileAbs, "utf8");
-                const s = detectSmells(skel, src.split("\n").length);
-                acPut(fileAbs, "smells", s);
-                all.push(...s);
-              } catch { /* skip */ }
-            }
-            data = all;
-            break;
-          }
-          case "security": {
-            const all: ReturnType<typeof scanFileForSecurityIssues> = [];
-            for (const skel of skeletons) {
-              const fileAbs = path.resolve(root, skel.file);
-              try {
-                const cached = acGet<ReturnType<typeof scanFileForSecurityIssues>>(fileAbs + "\0security");
-                if (cached) { all.push(...cached); continue; }
-                const src = fs.readFileSync(fileAbs, "utf8");
-                const issues = scanFileForSecurityIssues(src, skel.file);
-                acPut(fileAbs, "security", issues);
-                all.push(...issues);
-              } catch { /* skip */ }
-            }
-            data = all;
-            break;
-          }
-          case "complexity": {
-            const results = [];
-            for (const skel of skeletons) {
-              try {
-                results.push(await computeFileComplexity(path.resolve(root, skel.file), skel.file));
-              } catch { /* skip */ }
-            }
-            data = results;
-            break;
-          }
-          case "find": {
-            if (!args.query) throw new Error("query required");
-            data = await searchSymbols(scanDir, args.query as string, root, {
-              matchType: (args.matchType as "exact" | "contains" | "regex") ?? "contains",
-              kind: args.kind as string | undefined,
-            });
-            break;
-          }
-          case "impact": {
-            if (!args.symbol) throw new Error("symbol required");
-            data = getChangeImpact(graph, args.symbol as string);
-            break;
-          }
-          case "fileDeps": {
-            if (!args.file) throw new Error("file required");
-            data = getFileDeps(graph, args.file as string);
-            break;
-          }
-          case "explain": {
-            if (!args.file || !args.symbol) throw new Error("file and symbol required");
-            const skel = skeletons.find(
-              (s) => s.file === args.file || s.file.endsWith(args.file as string)
-            );
-            if (!skel) throw new Error(`File not found: ${args.file}`);
-            const nodeId = `${skel.file}::${args.symbol}`;
-            const impact = getChangeImpact(graph, nodeId);
-            data = buildExplainResult(args.symbol as string, skel, graph, impact, []);
-            break;
-          }
-          case "arch": {
-            const cfg = loadProjectConfig(root);
-            const rules = loadArchRules(cfg);
-            data = checkArchRules(graph, rules);
-            break;
-          }
-          case "diagram": {
-            const type = (args.type as string) ?? "deps";
-            if (type === "class") data = buildClassDiagram(skeletons);
-            else if (type === "modules") data = buildModulesDiagram(graph);
-            else data = buildDepsDiagram(graph, (args.maxNodes as number) ?? 50);
-            break;
-          }
-          case "doc": {
-            const docOut = buildDocOutput(skeletons, { exportedOnly: (args.exportedOnly as boolean) ?? false });
-            data = {
-              markdown: renderMarkdown(docOut),
-              files: docOut.files.length,
-              symbols: docOut.files.reduce((a: number, f) => a + f.symbols.length, 0),
-            };
-            break;
-          }
-          case "pr_diff": {
-            if (!isGitRepo(root)) throw new Error("Not a git repository.");
-            const baseRef = (args.base as string) ?? "main";
-            const diff = await computeDiff(scanDir, root, baseRef);
-            const smellsOptsPR = resolveOptions({ detail: "full", emitHtml: false });
-            const pSmells: SmellResult[] = [];
-            const pSec: ReturnType<typeof scanFileForSecurityIssues> = [];
-            for (const fd of diff.files) {
-              if (fd.status === "deleted") continue;
-              const fileAbs = path.resolve(root, fd.file);
-              try {
-                const cached = acGet<SmellResult[]>(fileAbs + "\0smells");
-                if (cached) { pSmells.push(...cached); }
-                else {
-                  const skel = await buildSkeleton(fileAbs, fd.file, smellsOptsPR);
-                  const lc = fs.readFileSync(fileAbs, "utf8").split("\n").length;
-                  const s = detectSmells(skel, lc, {});
-                  acPut(fileAbs, "smells", s);
-                  pSmells.push(...s);
-                }
-              } catch { /* skip */ }
-              try {
-                const cachedSec = acGet<ReturnType<typeof scanFileForSecurityIssues>>(fileAbs + "\0security");
-                if (cachedSec) { pSec.push(...cachedSec); }
-                else {
-                  const src = fs.readFileSync(fileAbs, "utf8");
-                  const issues = scanFileForSecurityIssues(src, fd.file);
-                  acPut(fileAbs, "security", issues);
-                  pSec.push(...issues);
-                }
-              } catch { /* skip */ }
-            }
-            data = {
-              base: baseRef,
-              summary: { ...diff.summary, smells: pSmells.length, securityIssues: pSec.length },
-              breaking: diff.breaking,
-              impactedFiles: diff.impactedFiles,
-              files: diff.files,
-              smells: pSmells.slice(0, 50),
-              security: pSec.slice(0, 50),
-            };
-            break;
-          }
-          default:
-            throw new Error(`Unknown command: ${cmd}`);
-        }
+        const data = await runCommand(cmd, args, skeletons, graph, root, scanDir);
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, cmd, data }));
