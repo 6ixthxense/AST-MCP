@@ -610,7 +610,7 @@ server.registerTool(
         .describe("Directory to scan (a FILE is allowed for complexity / unused-params). Default project root."),
       limit: z.number().int().min(1).max(100).optional().describe("`top` only: how many symbols. Default 10."),
       minGap: z.number().optional().describe("`layers` only: minimum instability gap, 0-1. Default 0."),
-      untestedOnly: z.boolean().optional().describe("`tests` only: return just the untested list. Default false."),
+      untestedOnly: z.boolean().optional().describe("`tests` only: drop the links/tested/reached lists, keeping both ratios and `untested`. Default false."),
       detail: z
         .enum(["outline", "full"])
         .optional()
