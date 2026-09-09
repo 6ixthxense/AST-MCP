@@ -286,6 +286,57 @@ function collapsibleCard(id: string, title: string, content: string, icon: strin
   </div>`;
 }
 
+/**
+ * The test-coverage card: a reach ring, the two figures behind it, and the
+ * untested list. Its own function because it is the one card built from three
+ * interacting pieces, and because complexity.ts scores by line range — a card
+ * left inline is measured as part of whatever encloses it.
+ */
+function renderCoverageCard(d: ReportData): {
+  summary: string;
+  list: string;
+  /** Reach percentage, and its colour — the stat tile and issue list use both. */
+  pct: number;
+  color: string;
+} {
+const namedPct = Math.round(d.testCoverage.coverageRatio * 100);
+const covPct = Math.round(d.testCoverage.reachRatio * 100);
+const covC = d.testCoverage.reachRatio >= 0.7 ? "#1d9e75" : d.testCoverage.reachRatio >= 0.4 ? "#ba7517" : "#e24b4a";
+
+const covRing = d.testCoverage.testFiles > 0 ? (() => {
+  const r = 28, circ = 2 * Math.PI * r;
+  const dash = (covPct / 100) * circ;
+  return `<div class="cov-ring-wrap">
+    <svg width="72" height="72" viewBox="0 0 72 72">
+      <circle cx="36" cy="36" r="${r}" fill="none" stroke="currentColor" stroke-width="7" opacity=".12"/>
+      <circle cx="36" cy="36" r="${r}" fill="none" stroke="${covC}" stroke-width="7"
+        stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}"
+        stroke-linecap="round" transform="rotate(-90 36 36)"/>
+      <text x="36" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="${covC}" font-family="system-ui,sans-serif">${covPct}%</text>
+    </svg>
+  </div>`;
+})() : "";
+
+const covSummary = d.testCoverage.testFiles > 0
+  ? `<div class="cov-summary">
+      ${covRing}
+      <div class="cov-text">
+        <div class="cov-pct" style="color:${covC}">${covPct}% reached by a test</div>
+        <div class="cov-detail">${d.testCoverage.testedSources}/${d.testCoverage.sourceFiles} named directly (${namedPct}%) &middot; ${d.testCoverage.reachedSources} more pulled in via imports &middot; ${d.testCoverage.testFiles} test file(s)${d.testCoverage.rootFallback ? " (from project root)" : ""}</div>
+      </div>
+    </div>` : "";
+const covList = d.testCoverage.testFiles === 0
+  ? `<div class="empty">No test files found in the scanned directory or project root.</div>`
+  : d.testCoverage.untested.length === 0
+    ? `<div class="ok">✓ Every source file is named or reached by a test</div>`
+    : `<div class="untested-header">Untested files (by risk)</div>`
+      + d.testCoverage.untested.map((u) =>
+        `<div class="li"><span class="mono">${esc(u.file)}</span><span class="dim">${u.symbols} symbol(s)</span><span class="pill">Ca ${u.afferent}</span></div>`).join("")
+      + (d.testCoverage.untestedCount > d.testCoverage.untested.length
+        ? `<div class="more">+${d.testCoverage.untestedCount - d.testCoverage.untested.length} more untested…</div>` : "");
+  return { summary: covSummary, list: covList, pct: covPct, color: covC };
+}
+
 export function buildReportHtml(d: ReportData, history: HistoryEntry[] = []): string {
   const gc = GRADE_COLOR[d.grade] ?? "#888";
   const prev = history.length >= 2 ? history[history.length - 2] : null;
@@ -329,41 +380,7 @@ export function buildReportHtml(d: ReportData, history: HistoryEntry[] = []): st
         `${m.module}  ·  ${m.files} file(s)`, m.instability, 1, instColor(m.instability),
         `Ca ${m.afferent} · Ce ${m.efferent} · <b>I ${m.instability.toFixed(2)}</b>`)).join("")
     : `<div class="empty">No cross-module imports.</div>`;
-  const namedPct = Math.round(d.testCoverage.coverageRatio * 100);
-  const covPct = Math.round(d.testCoverage.reachRatio * 100);
-  const covC = d.testCoverage.reachRatio >= 0.7 ? "#1d9e75" : d.testCoverage.reachRatio >= 0.4 ? "#ba7517" : "#e24b4a";
-
-  const covRing = d.testCoverage.testFiles > 0 ? (() => {
-    const r = 28, circ = 2 * Math.PI * r;
-    const dash = (covPct / 100) * circ;
-    return `<div class="cov-ring-wrap">
-      <svg width="72" height="72" viewBox="0 0 72 72">
-        <circle cx="36" cy="36" r="${r}" fill="none" stroke="currentColor" stroke-width="7" opacity=".12"/>
-        <circle cx="36" cy="36" r="${r}" fill="none" stroke="${covC}" stroke-width="7"
-          stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}"
-          stroke-linecap="round" transform="rotate(-90 36 36)"/>
-        <text x="36" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="${covC}" font-family="system-ui,sans-serif">${covPct}%</text>
-      </svg>
-    </div>`;
-  })() : "";
-
-  const covSummary = d.testCoverage.testFiles > 0
-    ? `<div class="cov-summary">
-        ${covRing}
-        <div class="cov-text">
-          <div class="cov-pct" style="color:${covC}">${covPct}% reached by a test</div>
-          <div class="cov-detail">${d.testCoverage.testedSources}/${d.testCoverage.sourceFiles} named directly (${namedPct}%) &middot; ${d.testCoverage.reachedSources} more pulled in via imports &middot; ${d.testCoverage.testFiles} test file(s)${d.testCoverage.rootFallback ? " (from project root)" : ""}</div>
-        </div>
-      </div>` : "";
-  const covList = d.testCoverage.testFiles === 0
-    ? `<div class="empty">No test files found in the scanned directory or project root.</div>`
-    : d.testCoverage.untested.length === 0
-      ? `<div class="ok">✓ Every source file is named or reached by a test</div>`
-      : `<div class="untested-header">Untested files (by risk)</div>`
-        + d.testCoverage.untested.map((u) =>
-          `<div class="li"><span class="mono">${esc(u.file)}</span><span class="dim">${u.symbols} symbol(s)</span><span class="pill">Ca ${u.afferent}</span></div>`).join("")
-        + (d.testCoverage.untestedCount > d.testCoverage.untested.length
-          ? `<div class="more">+${d.testCoverage.untestedCount - d.testCoverage.untested.length} more untested…</div>` : "");
+  const { summary: covSummary, list: covList, pct: covPct, color: covC } = renderCoverageCard(d);
   const sdp = d.layerViolations.count
     ? d.layerViolations.items.map((v) => `<div class="li">
         <span class="mono">${esc(v.from)}</span>
@@ -379,7 +396,7 @@ export function buildReportHtml(d: ReportData, history: HistoryEntry[] = []): st
     d.dead.count > 5 ? `<div class="issue-row issue-warn">🟠 ${d.dead.count} dead exports (potential dead code)</div>` : "",
     d.complexity.max > 20 ? `<div class="issue-row issue-warn">🟠 Max complexity ${d.complexity.max} — consider refactoring</div>` : "",
     d.testCoverage.testFiles === 0 ? `<div class="issue-row issue-warn">🟡 No test files found</div>` :
-      covPct < 40 ? `<div class="issue-row issue-warn">🟡 Low test coverage (${covPct}%)</div>` : "",
+      covPct < 40 ? `<div class="issue-row issue-warn">🟡 Only ${covPct}% of sources are reached by a test</div>` : "",
     d.layerViolations.count > 5 ? `<div class="issue-row issue-info">🔵 ${d.layerViolations.count} layer violations (SDP)</div>` : "",
   ].filter(Boolean).join("");
 
@@ -531,7 +548,7 @@ body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"S
   ${statCard("Dead exports", d.dead.count, d.dead.count > 5 ? "#d85a30" : d.dead.count > 0 ? "#ba7517" : "#1d9e75")}
   ${statCard("Cycles", d.cycles.count, d.cycles.count ? "#e24b4a" : "#1d9e75")}
   ${statCard("SDP violations", d.layerViolations.count, d.layerViolations.count > 5 ? "#d85a30" : d.layerViolations.count > 0 ? "#ba7517" : "#1d9e75")}
-  ${statCard("Test coverage", covPct + "%", covC)}
+  ${statCard("Test reach", covPct + "%", covC)}
 </div>
 
 ${collapsibleCard("langs", "Language breakdown", langs || `<div class="empty">No data.</div>`, "🌐")}
