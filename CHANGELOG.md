@@ -6,6 +6,21 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.11] — 2026-09-09 · patch
+
+- **fix:** two Windows-only bugs that made local development red while CI stayed green — `plugins.ts` imported a plugin path directly instead of via `pathToFileURL`, so every plugin load threw `ERR_UNSUPPORTED_ESM_URL_SCHEME` (swallowed by a per-file catch, silently disabling the whole plugin system); `tsconfig.ts` alias resolution left mixed path separators on Windows, breaking some `paths` remaps.
+- **test:** `test/run-all.mjs` now runs every file in `test/`, judging pass/fail by each suite's own declared result rather than process exit code — five suites had drifted to running only in CI, and `web-tree-sitter`'s WASM teardown crash was masking real results with a nonzero exit.
+- **fix:** test coverage now counts what a test *transitively reaches* via the import graph, not only files a naming convention matches — the old metric badly undercounted real coverage.
+- **fix:** `AST_MAP_ROOT` pointing at a nonexistent directory now warns once instead of failing silently; README Quick Start shows the `npx` invocation.
+- **refactor:** consolidated six near-identical Anthropic API client implementations into one (`src/anthropic.ts`); default model is now `claude-sonnet-5`.
+- **fix:** broke a type-only import cycle between `history.ts` and `report.ts`.
+- **test:** added a smoke test for `detect_code_smells` and `scan_security`, which had shipped with none.
+- **feat:** the health-score formula now scales with repo size — every lever is a ratio (dead exports / exported symbols, cycles / files, etc.) instead of a raw count, so a small and a large repo with proportionally the same problems score the same. The report now shows a per-lever breakdown of where points were lost.
+- **fix:** cyclomatic complexity is now scored per function on its own branches — a function that only declared a complex nested closure previously inherited that closure's whole score, and the closure itself was never reported. Nested functions now appear as their own entries.
+- **fix:** applied `npm audit fix` to close 6 known vulnerabilities in transitive dependencies.
+
+---
+
 ## [2.0.10] — 2026-07-08 · patch
 
 - **fix:** Python `from x import y` (unaliased, the most common Python import form) was silently dropped by the extractor — a `dotted_name`/`relative_import` type check meant to skip the module path also matched the imported name itself. Every downstream feature (graph edges, `resolve_imports`, call graph) missed these imports entirely; multi-name (`from x import a, b`) and single-dot (`from . import a`) forms were affected too.
