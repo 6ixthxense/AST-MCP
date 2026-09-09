@@ -13,7 +13,4 @@ jobs:
           node-version: "20"
       - run: npm ci || npm install
       - run: npm run build
-      - run: npm test
-      - run: node test/graph-smoke.mjs && node test/resolver-smoke.mjs && node test/callgraph-smoke.mjs
-      - run: node test/resources-smoke.mjs
-      - run: node test/prompts-smoke.mjs
+      - run: npm test   # test/run-all.mjs picks up every test/*.mjs
