@@ -8,8 +8,11 @@ file. Built on [tree-sitter](https://tree-sitter.github.io/) WASM grammars — r
 parsing, no regex guessing.
 
 ```bash
-npx universal-ast-mapper report src/     # health grade for any repo, no install
+npx -p universal-ast-mapper ast-map report src/   # health grade for any repo, no install
 ```
+
+> The bare package name (`npx universal-ast-mapper`) starts the **MCP server** on stdio —
+> that's the binary MCP clients launch. Use `-p … ast-map` for the CLI.
 
 ---
 

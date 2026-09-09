@@ -1288,6 +1288,17 @@ async function main(): Promise<void> {
     `universal-ast-mapper running. roots=${ROOTS.roots.join(path.delimiter)}` +
       (ROOTS.unlocked ? " (UNLOCKED: any absolute path allowed)" : "") + "\n",
   );
+
+  // A typo'd AST_MAP_ROOT otherwise starts cleanly and then fails on every call
+  // with a confusing per-tool error. Say it once, here, where it is obvious.
+  const bad = ROOTS.roots.filter((r) => !fs.existsSync(r));
+  if (bad.length > 0) {
+    process.stderr.write(
+      `WARNING: ${bad.length === 1 ? "root does not exist" : "these roots do not exist"}: ` +
+        `${bad.join(", ")}\n` +
+        "  Every tool call will fail until AST_MAP_ROOT points at a real directory.\n",
+    );
+  }
 }
 
 main().catch((err) => {
