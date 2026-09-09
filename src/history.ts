@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ReportData } from "./report.js";
 
 export interface HistoryEntry {
   date: string;       // ISO date string (generatedAt)
@@ -15,6 +14,23 @@ export interface HistoryEntry {
   coverage: number;
   /** Sources a test reaches through imports, 0-100. Absent on entries written before 2.1. */
   reach?: number;
+}
+
+/**
+ * The slice of a report that history records. Declared structurally rather than
+ * imported from report.ts: `ReportData` satisfies it, so callers are unchanged,
+ * and history.ts stops depending on the module that depends on it.
+ */
+export interface HistorySource {
+  generatedAt: string;
+  score: number;
+  grade: string;
+  fileCount: number;
+  symbolCount: number;
+  dead: { count: number };
+  cycles: { count: number };
+  complexity: { max: number };
+  testCoverage: { coverageRatio: number; reachRatio: number };
 }
 
 const HISTORY_SUBPATH = ".ast-map/history.json";
@@ -32,7 +48,7 @@ export function loadHistory(root: string): HistoryEntry[] {
 }
 
 /** Append current report to history (one entry per calendar day, keep last 30). */
-export function appendHistory(root: string, report: ReportData): HistoryEntry[] {
+export function appendHistory(root: string, report: HistorySource): HistoryEntry[] {
   const entry: HistoryEntry = {
     date: report.generatedAt,
     score: report.score,

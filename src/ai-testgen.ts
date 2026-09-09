@@ -6,7 +6,7 @@ import { callClaude } from "./anthropic.js";
 export interface AiTestGenOptions {
   /** Anthropic API key — falls back to ANTHROPIC_API_KEY env var. */
   apiKey?: string;
-  /** Model ID (default: claude-sonnet-4-6). */
+  /** Model ID (default: claude-sonnet-5). */
   model?: string;
   /** Max tokens in the response (default: 4096). */
   maxTokens?: number;

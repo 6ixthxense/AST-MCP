@@ -2086,7 +2086,7 @@ server.registerTool(
         .optional()
         .describe("Test framework. Auto-detected when omitted."),
       api_key: z.string().optional().describe("Anthropic API key (overrides ANTHROPIC_API_KEY env var)."),
-      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-4-6)."),
+      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-5)."),
     },
   },
   async ({ path: input, framework, api_key, model }) => {
@@ -2120,7 +2120,7 @@ server.registerTool(
         .optional()
         .describe("Which issues to refactor: smell | security | both (default: both)."),
       api_key: z.string().optional().describe("Anthropic API key (overrides ANTHROPIC_API_KEY env var)."),
-      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-4-6)."),
+      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-5)."),
       limit: z
         .number()
         .int()
@@ -2180,7 +2180,7 @@ server.registerTool(
       scanDir: z.string().optional().describe("Directory to build the dependency graph from. Default: file directory."),
       ai: z.boolean().optional().describe("Use Claude AI to generate a prose explanation. Default false."),
       api_key: z.string().optional().describe("Anthropic API key (overrides ANTHROPIC_API_KEY)."),
-      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-4-6)."),
+      model: z.string().optional().describe("Claude model ID (default: claude-sonnet-5)."),
     },
   },
   async ({ path: input, symbol, scanDir, ai, api_key, model }) => {

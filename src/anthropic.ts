@@ -19,7 +19,7 @@ export interface ClaudeOptions {
 }
 
 /** Default model for every AI feature. One place to change it. */
-export const DEFAULT_MODEL = "claude-sonnet-4-6";
+export const DEFAULT_MODEL = "claude-sonnet-5";
 
 /** The model a call will actually use — for reporting it back in results. */
 export function modelFor(opts: ClaudeOptions): string {

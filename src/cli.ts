@@ -1528,7 +1528,7 @@ program
   .option("--dry-run", "Print generated content to stdout, do not write files")
   .option("--ai", "Use Claude API to fill in real assertions (requires ANTHROPIC_API_KEY)")
   .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
-  .option("--model <id>", "Claude model ID (default: claude-sonnet-4-6)")
+  .option("--model <id>", "Claude model ID (default: claude-sonnet-5)")
   .option("--json", "Output metadata as JSON")
   .action(async (inputPath: string, opts: {
     framework?: string; out?: string; all?: boolean;
@@ -1818,7 +1818,7 @@ program
   .option("-p, --priority <n>", "Only show fixes of priority ≤ n (1=must, 2=should, 3=nice)", (v) => parseInt(v, 10), 3)
   .option("--ai", "Use Claude API to generate concrete refactored code for each issue (requires ANTHROPIC_API_KEY)")
   .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
-  .option("--model <id>", "Claude model ID (default: claude-sonnet-4-6)")
+  .option("--model <id>", "Claude model ID (default: claude-sonnet-5)")
   .option("--limit <n>", "Max issues to send to AI per run (default 3)", (v) => parseInt(v, 10), 3)
   .action(async (dir: string | undefined, opts: { json?: boolean; priority: number; ai?: boolean; apiKey?: string; model?: string; limit: number }) => {
     const { abs, rel } = resolveArg(dir ?? ".");
@@ -2083,7 +2083,7 @@ program
   .option("--scan <dir>", "Directory to build the dependency graph from (default: file's directory)")
   .option("--ai", "Use Claude API to generate a prose explanation (requires ANTHROPIC_API_KEY)")
   .option("--api-key <key>", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
-  .option("--model <id>", "Claude model ID (default: claude-sonnet-4-6)")
+  .option("--model <id>", "Claude model ID (default: claude-sonnet-5)")
   .option("--json", "Output as JSON")
   .action(async (inputPath: string, symbolName: string, opts: { scan?: string; ai?: boolean; apiKey?: string; model?: string; json?: boolean }) => {
     const { abs, rel } = resolveArg(inputPath);
