@@ -31,6 +31,15 @@ export interface TestedSource {
   tests: string[];
 }
 
+/** A source no test names, but that a directly-tested file pulls in. */
+export interface ReachedSource {
+  file: string;
+  /** The directly-tested source the import chain starts from. */
+  from: string;
+  /** How many imports away it is (1 = imported by a directly-tested file). */
+  depth: number;
+}
+
 export interface UntestedSource {
   file: string;
   /** Symbol count — bigger files are worse to leave untested. */
@@ -44,12 +53,24 @@ export interface TestCoverageMap {
   testFiles: number;
   /** Files under fixtures/mocks/testdata dirs — support material, excluded from both sides. */
   fixtureFiles: number;
+  /** Sources a test file names directly (import edge or naming convention). */
   testedSources: number;
+  /** Sources no test names and no tested file imports — the real blind spots. */
   untestedSources: number;
   /** testedSources / sourceFiles, 2-decimal (0 when no sources). */
   coverageRatio: number;
+  /**
+   * Sources a test file *reaches*: directly tested, plus everything those files
+   * import transitively. Integration-style suites exercise far more than they
+   * name, so `coverageRatio` alone reads far too low for them — compare the two.
+   */
+  reachedSources: number;
+  /** (testedSources + reachedSources) / sourceFiles, 2-decimal. */
+  reachRatio: number;
   links: TestLink[];
   tested: TestedSource[];
+  /** Reached only through another file's imports, nearest first. */
+  reached: ReachedSource[];
   /** Sorted by risk: afferent desc, then symbols desc. */
   untested: UntestedSource[];
   /** Test files that could not be paired with any source file. */
@@ -114,6 +135,45 @@ function commonPrefixLen(a: string, b: string): number {
 
 function baseNoExt(rel: string): string {
   return rel.split("/").pop()!.replace(/\.[^.]+$/, "");
+}
+
+/**
+ * A directly-tested file's imports are exercised too, and so are theirs.
+ * Breadth-first from every directly-tested source along source→source import
+ * edges, so each entry's `depth` is the shortest chain that reaches it.
+ * Test files are never traversed — only production sources.
+ */
+function reachFrom(
+  seeds: string[],
+  graph: SymbolGraph,
+  nodeMap: Map<string, SymbolGraph["nodes"][number]>,
+  isTest: Set<string>,
+): Map<string, { from: string; depth: number }> {
+  const imports = new Map<string, Set<string>>();
+  for (const e of graph.edges) {
+    if (e.edgeType !== "imports" || isTest.has(e.from)) continue;
+    const to = nodeMap.get(e.to);
+    const toFile = to ? (to.nodeType === "file" ? to.id : (to as GraphSymbolNode).file) : null;
+    if (!toFile || e.from === toFile || isTest.has(toFile)) continue;
+    (imports.get(e.from) ?? imports.set(e.from, new Set()).get(e.from)!).add(toFile);
+  }
+
+  const reached = new Map<string, { from: string; depth: number }>();
+  const visited = new Set(seeds);
+  let frontier = seeds.map((file) => ({ file, from: file, depth: 0 }));
+  while (frontier.length > 0) {
+    const next: typeof frontier = [];
+    for (const cur of frontier) {
+      for (const dep of imports.get(cur.file) ?? []) {
+        if (visited.has(dep)) continue;
+        visited.add(dep);
+        reached.set(dep, { from: cur.from, depth: cur.depth + 1 });
+        next.push({ file: dep, from: cur.from, depth: cur.depth + 1 });
+      }
+    }
+    frontier = next;
+  }
+  return reached;
 }
 
 /**
@@ -185,13 +245,20 @@ export function mapTestCoverage(graph: SymbolGraph): TestCoverageMap {
   for (const l of links) {
     (testsBySource.get(l.source) ?? testsBySource.set(l.source, []).get(l.source)!).push(l.test);
   }
+
+  const reachedBy = reachFrom([...testsBySource.keys()], graph, nodeMap, isTest);
+
   const tested: TestedSource[] = [];
+  const reached: ReachedSource[] = [];
   const untested: UntestedSource[] = [];
   for (const s of sourceFiles) {
     const tests = testsBySource.get(s.id);
-    if (tests) tested.push({ file: s.id, tests: [...new Set(tests)].sort() });
+    if (tests) { tested.push({ file: s.id, tests: [...new Set(tests)].sort() }); continue; }
+    const via = reachedBy.get(s.id);
+    if (via) reached.push({ file: s.id, from: via.from, depth: via.depth });
     else untested.push({ file: s.id, symbols: s.symbolCount, afferent: afferent.get(s.id)?.size ?? 0 });
   }
+  reached.sort((a, b) => a.depth - b.depth || a.file.localeCompare(b.file));
   tested.sort((a, b) => a.file.localeCompare(b.file));
   untested.sort((a, b) => b.afferent - a.afferent || b.symbols - a.symbols || a.file.localeCompare(b.file));
   const covered = new Set(links.map((l) => l.test));
@@ -204,8 +271,13 @@ export function mapTestCoverage(graph: SymbolGraph): TestCoverageMap {
     testedSources: tested.length,
     untestedSources: untested.length,
     coverageRatio: sourceFiles.length === 0 ? 0 : Math.round((tested.length / sourceFiles.length) * 100) / 100,
+    reachedSources: reached.length,
+    reachRatio: sourceFiles.length === 0
+      ? 0
+      : Math.round(((tested.length + reached.length) / sourceFiles.length) * 100) / 100,
     links,
     tested,
+    reached,
     untested,
     orphanTests,
   };

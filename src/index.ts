@@ -1647,7 +1647,16 @@ server.registerTool(
       const map = mapTestCoverage(buildSymbolGraph(skels, root));
       const dir = rel.split(path.sep).join("/") || ".";
       if (untestedOnly) {
-        return jsonText({ directory: dir, untestedSources: map.untestedSources, coverageRatio: map.coverageRatio, untested: map.untested });
+        // untestedOnly trims the lists, never the headline numbers — dropping
+        // reachRatio would leave only the figure that reads too low.
+        return jsonText({
+          directory: dir,
+          untestedSources: map.untestedSources,
+          coverageRatio: map.coverageRatio,
+          reachedSources: map.reachedSources,
+          reachRatio: map.reachRatio,
+          untested: map.untested,
+        });
       }
       return jsonText({ directory: dir, ...map });
     } catch (err) {

@@ -11,7 +11,10 @@ export interface HistoryEntry {
   dead: number;
   cycles: number;
   maxComplexity: number;
-  coverage: number;   // 0-100 integer
+  /** Sources a test names directly, 0-100 integer. Kept so old entries stay comparable. */
+  coverage: number;
+  /** Sources a test reaches through imports, 0-100. Absent on entries written before 2.1. */
+  reach?: number;
 }
 
 const HISTORY_SUBPATH = ".ast-map/history.json";
@@ -40,6 +43,7 @@ export function appendHistory(root: string, report: ReportData): HistoryEntry[] 
     cycles: report.cycles.count,
     maxComplexity: report.complexity.max,
     coverage: Math.round(report.testCoverage.coverageRatio * 100),
+    reach: Math.round(report.testCoverage.reachRatio * 100),
   };
   const history = loadHistory(root);
   const today = entry.date.slice(0, 10);
