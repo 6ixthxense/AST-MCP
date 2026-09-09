@@ -273,6 +273,35 @@ const STOPWORDS = new Set([
 ]);
 
 /**
+ * Tokenize every symbol under `dirAbs` into the searchable corpus. Parsed at
+ * detail "full" so doc comments and signatures contribute tokens; unreadable or
+ * unparseable files are skipped rather than failing the search.
+ */
+async function buildCorpus(
+  dirAbs: string,
+  root: string,
+  kind: string | undefined,
+  exportedOnly: boolean,
+): Promise<SymbolDoc[]> {
+  const opts = resolveOptions({ detail: "full", emitHtml: false }, loadProjectConfig(root));
+  const docs: SymbolDoc[] = [];
+  for (const file of collectSourceFiles(dirAbs, opts)) {
+    const fileRel = path.relative(root, file).split(path.sep).join("/");
+    try {
+      const skel = await buildSkeleton(file, fileRel, opts);
+      for (const { sym, fullName } of flattenDocs(skel.symbols, skel.file)) {
+        if (kind && sym.kind !== kind) continue;
+        if (exportedOnly && !(sym.exported ?? false)) continue;
+        docs.push(buildDoc(sym, fullName, skel.file));
+      }
+    } catch {
+      // skip unreadable / unparseable files
+    }
+  }
+  return docs;
+}
+
+/**
  * Search for symbols by meaning across all source files in a directory.
  *
  * @param dirAbs   Absolute path of directory to scan.
@@ -297,23 +326,7 @@ export async function semanticSearch(
   }
   if (concepts.length === 0) return [];
 
-  // Build corpus (detail "full" so doc comments and signatures are available).
-  const opts = resolveOptions({ detail: "full", emitHtml: false }, loadProjectConfig(root));
-  const files = collectSourceFiles(dirAbs, opts);
-  const docs: SymbolDoc[] = [];
-  for (const file of files) {
-    const fileRel = path.relative(root, file).split(path.sep).join("/");
-    try {
-      const skel = await buildSkeleton(file, fileRel, opts);
-      for (const { sym, fullName } of flattenDocs(skel.symbols, skel.file)) {
-        if (kind && sym.kind !== kind) continue;
-        if (exportedOnly && !(sym.exported ?? false)) continue;
-        docs.push(buildDoc(sym, fullName, skel.file));
-      }
-    } catch {
-      // skip unreadable / unparseable files
-    }
-  }
+  const docs = await buildCorpus(dirAbs, root, kind, exportedOnly);
   if (docs.length === 0) return [];
 
   // Document frequency per concept (direct-token presence) → BM25-ish IDF.

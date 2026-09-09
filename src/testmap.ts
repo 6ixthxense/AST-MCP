@@ -138,6 +138,45 @@ function baseNoExt(rel: string): string {
 }
 
 /**
+ * A directly-tested file's imports are exercised too, and so are theirs.
+ * Breadth-first from every directly-tested source along source→source import
+ * edges, so each entry's `depth` is the shortest chain that reaches it.
+ * Test files are never traversed — only production sources.
+ */
+function reachFrom(
+  seeds: string[],
+  graph: SymbolGraph,
+  nodeMap: Map<string, SymbolGraph["nodes"][number]>,
+  isTest: Set<string>,
+): Map<string, { from: string; depth: number }> {
+  const imports = new Map<string, Set<string>>();
+  for (const e of graph.edges) {
+    if (e.edgeType !== "imports" || isTest.has(e.from)) continue;
+    const to = nodeMap.get(e.to);
+    const toFile = to ? (to.nodeType === "file" ? to.id : (to as GraphSymbolNode).file) : null;
+    if (!toFile || e.from === toFile || isTest.has(toFile)) continue;
+    (imports.get(e.from) ?? imports.set(e.from, new Set()).get(e.from)!).add(toFile);
+  }
+
+  const reached = new Map<string, { from: string; depth: number }>();
+  const visited = new Set(seeds);
+  let frontier = seeds.map((file) => ({ file, from: file, depth: 0 }));
+  while (frontier.length > 0) {
+    const next: typeof frontier = [];
+    for (const cur of frontier) {
+      for (const dep of imports.get(cur.file) ?? []) {
+        if (visited.has(dep)) continue;
+        visited.add(dep);
+        reached.set(dep, { from: cur.from, depth: cur.depth + 1 });
+        next.push({ file: dep, from: cur.from, depth: cur.depth + 1 });
+      }
+    }
+    frontier = next;
+  }
+  return reached;
+}
+
+/**
  * Build the test↔source coverage map from a symbol graph
  * (use `buildSymbolGraph` over a directory that includes the test files).
  */
@@ -207,32 +246,7 @@ export function mapTestCoverage(graph: SymbolGraph): TestCoverageMap {
     (testsBySource.get(l.source) ?? testsBySource.set(l.source, []).get(l.source)!).push(l.test);
   }
 
-  // Transitive reach: a directly-tested file's imports are exercised too, and so
-  // are theirs. Breadth-first from every directly-tested source along the
-  // source→source import edges, so `depth` is the shortest chain.
-  const imports = new Map<string, Set<string>>(); // source -> sources it imports
-  for (const e of graph.edges) {
-    if (e.edgeType !== "imports" || isTest.has(e.from)) continue;
-    const to = nodeMap.get(e.to);
-    const toFile = to ? (to.nodeType === "file" ? to.id : (to as GraphSymbolNode).file) : null;
-    if (!toFile || e.from === toFile || isTest.has(toFile)) continue;
-    (imports.get(e.from) ?? imports.set(e.from, new Set()).get(e.from)!).add(toFile);
-  }
-  const reachedBy = new Map<string, { from: string; depth: number }>();
-  let frontier = [...testsBySource.keys()].map((f) => ({ file: f, from: f, depth: 0 }));
-  const visited = new Set(frontier.map((f) => f.file));
-  while (frontier.length > 0) {
-    const next: typeof frontier = [];
-    for (const cur of frontier) {
-      for (const dep of imports.get(cur.file) ?? []) {
-        if (visited.has(dep)) continue;
-        visited.add(dep);
-        reachedBy.set(dep, { from: cur.from, depth: cur.depth + 1 });
-        next.push({ file: dep, from: cur.from, depth: cur.depth + 1 });
-      }
-    }
-    frontier = next;
-  }
+  const reachedBy = reachFrom([...testsBySource.keys()], graph, nodeMap, isTest);
 
   const tested: TestedSource[] = [];
   const reached: ReachedSource[] = [];

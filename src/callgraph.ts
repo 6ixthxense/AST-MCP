@@ -6,7 +6,7 @@ import { buildSkeleton } from "./skeleton.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
 import { detectLanguage } from "./registry.js";
 import { resolveImportPath, resolveAliasedImport, getOrBuildCrossLangIndex } from "./resolver.js";
-import { resolveCrossLangTarget } from "./crosslang.js";
+import { resolveCrossLangTarget, type CrossLangIndex } from "./crosslang.js";
 import type { ImportRef, SkeletonFile } from "./types.js";
 
 // ─── Public types ──────────────────────────────────────────────────────────────
@@ -285,6 +285,99 @@ async function fileCallsSymbol(fileAbs: string, funcName: string): Promise<boole
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Reverse direction: which other files call `funcName`?
+ *
+ * Two passes, because import syntax differs in how much it tells us. Languages
+ * that name the imported symbol resolve directly. C# and Go name only a
+ * namespace/package, so a second pass confirms the file imports us and then
+ * scans its call sites — the import alone is too broad to claim a call.
+ */
+async function findCallers(
+  funcName: string,
+  relPath: string,
+  root: string,
+  skel: SkeletonFile,
+  crossIndex: CrossLangIndex | null,
+  allSkeletons: SkeletonFile[] | undefined,
+): Promise<CalledByRef[]> {
+  // ── calledBy: who imports this function? ────────────────────────────────
+  const calledBy: CalledByRef[] = [];
+  if (allSkeletons) {
+    for (const otherSkel of allSkeletons) {
+      if (otherSkel.file === relPath) continue;
+      const otherIsCrossLang = CROSS_LANG.has(otherSkel.language);
+      const otherAbs = path.resolve(root, otherSkel.file);
+
+      for (const imp of otherSkel.imports ?? []) {
+        const importedName = imp.alias ?? imp.symbol;
+        if (importedName !== funcName && imp.symbol !== funcName) continue;
+
+        if (otherIsCrossLang) {
+          // Symbol-level cross-lang match only — file/namespace edges are too
+          // broad to claim "this file calls funcName".
+          if (!crossIndex) continue;
+          const target = resolveCrossLangTarget(imp, otherSkel, otherAbs, root, crossIndex);
+          if (target && target.kind === "symbol" && target.file === relPath && target.symbol === funcName) {
+            calledBy.push({ file: otherSkel.file });
+            break;
+          }
+        } else {
+          const resolvedAbs = imp.from.startsWith(".")
+            ? resolveImportPath(imp.from, otherAbs)
+            : resolveAliasedImport(imp.from, otherAbs);
+          if (!resolvedAbs) continue;
+          const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
+          if (resolvedRel === relPath) {
+            calledBy.push({ file: otherSkel.file });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Extra pass: for C# / Go, the cross-lang resolver gives file-level targets
+  // (namespace / package) so the loop above misses callers that only show up
+  // via name-resolution at the call site. Scan candidate files' call sites.
+  if (
+    allSkeletons &&
+    crossIndex &&
+    (skel.language === "csharp" || skel.language === "go")
+  ) {
+    const seenFiles = new Set(calledBy.map((c) => c.file));
+    for (const otherSkel of allSkeletons) {
+      if (otherSkel.file === relPath) continue;
+      if (otherSkel.language !== skel.language) continue;
+      if (seenFiles.has(otherSkel.file)) continue;
+      const otherAbs = path.resolve(root, otherSkel.file);
+
+      // Confirm this other file imports / uses something that resolves to us.
+      let importsUs = false;
+      for (const imp of otherSkel.imports ?? []) {
+        const target = resolveCrossLangTarget(imp, otherSkel, otherAbs, root, crossIndex);
+        if (!target) continue;
+        if (target.kind === "file" && target.files.includes(relPath)) {
+          importsUs = true;
+          break;
+        }
+        if (target.kind === "symbol" && target.file === relPath) {
+          importsUs = true;
+          break;
+        }
+      }
+      if (!importsUs) continue;
+
+      if (await fileCallsSymbol(otherAbs, funcName)) {
+        calledBy.push({ file: otherSkel.file });
+        seenFiles.add(otherSkel.file);
+      }
+    }
+  }
+
+  return calledBy;
+}
+
 /** Recursively find the first symbol with the given name and return its decorators. */
 function findDecorators(symbols: SkeletonFile["symbols"], name: string): string[] | undefined {
   for (const s of symbols) {
@@ -412,79 +505,7 @@ export async function buildCallGraph(
     calls.push(call);
   }
 
-  // ── calledBy: who imports this function? ────────────────────────────────
-  const calledBy: CalledByRef[] = [];
-  if (allSkeletons) {
-    for (const otherSkel of allSkeletons) {
-      if (otherSkel.file === relPath) continue;
-      const otherIsCrossLang = CROSS_LANG.has(otherSkel.language);
-      const otherAbs = path.resolve(root, otherSkel.file);
-
-      for (const imp of otherSkel.imports ?? []) {
-        const importedName = imp.alias ?? imp.symbol;
-        if (importedName !== funcName && imp.symbol !== funcName) continue;
-
-        if (otherIsCrossLang) {
-          // Symbol-level cross-lang match only — file/namespace edges are too
-          // broad to claim "this file calls funcName".
-          if (!crossIndex) continue;
-          const target = resolveCrossLangTarget(imp, otherSkel, otherAbs, root, crossIndex);
-          if (target && target.kind === "symbol" && target.file === relPath && target.symbol === funcName) {
-            calledBy.push({ file: otherSkel.file });
-            break;
-          }
-        } else {
-          const resolvedAbs = imp.from.startsWith(".")
-            ? resolveImportPath(imp.from, otherAbs)
-            : resolveAliasedImport(imp.from, otherAbs);
-          if (!resolvedAbs) continue;
-          const resolvedRel = path.relative(root, resolvedAbs).split(path.sep).join("/");
-          if (resolvedRel === relPath) {
-            calledBy.push({ file: otherSkel.file });
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // Extra pass: for C# / Go, the cross-lang resolver gives file-level targets
-  // (namespace / package) so the loop above misses callers that only show up
-  // via name-resolution at the call site. Scan candidate files' call sites.
-  if (
-    allSkeletons &&
-    crossIndex &&
-    (skel.language === "csharp" || skel.language === "go")
-  ) {
-    const seenFiles = new Set(calledBy.map((c) => c.file));
-    for (const otherSkel of allSkeletons) {
-      if (otherSkel.file === relPath) continue;
-      if (otherSkel.language !== skel.language) continue;
-      if (seenFiles.has(otherSkel.file)) continue;
-      const otherAbs = path.resolve(root, otherSkel.file);
-
-      // Confirm this other file imports / uses something that resolves to us.
-      let importsUs = false;
-      for (const imp of otherSkel.imports ?? []) {
-        const target = resolveCrossLangTarget(imp, otherSkel, otherAbs, root, crossIndex);
-        if (!target) continue;
-        if (target.kind === "file" && target.files.includes(relPath)) {
-          importsUs = true;
-          break;
-        }
-        if (target.kind === "symbol" && target.file === relPath) {
-          importsUs = true;
-          break;
-        }
-      }
-      if (!importsUs) continue;
-
-      if (await fileCallsSymbol(otherAbs, funcName)) {
-        calledBy.push({ file: otherSkel.file });
-        seenFiles.add(otherSkel.file);
-      }
-    }
-  }
+  const calledBy = await findCallers(funcName, relPath, root, skel, crossIndex, allSkeletons);
 
   const decorators = findDecorators(skel.symbols, funcName);
 
