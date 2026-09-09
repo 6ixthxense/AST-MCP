@@ -239,6 +239,22 @@ console.log("\n=== Symbol Search ===");
   check("branchy has complexity 6 (if + && + for + if + ternary)", branchy?.complexity === 6, `got ${branchy?.complexity}`);
   check("branchy rated moderate", branchy?.rating === "moderate");
   check("functions sorted desc by complexity", fc.functions[0].name === "branchy");
+
+  // Nested functions are scored on their own control flow and reported in their
+  // own right. Attributing by raw line range put every closure's branches on
+  // whatever enclosed it, and never listed the closure at all — so extracting a
+  // nested helper (the commonest refactor here) changed nothing.
+  const byName = Object.fromEntries(fc.functions.map((f) => [f.name, f]));
+  check("a wrapper with no branches of its own scores 1",
+    byName.wrapper?.complexity === 1, `got ${byName.wrapper?.complexity}`);
+  check("its nested arrow is reported separately, by its binding name",
+    byName.nested?.complexity === 4, `got ${byName.nested?.complexity}`);
+  check("an enclosing function still counts its own branches",
+    byName.ownBranchPlusNested?.complexity === 2, `got ${byName.ownBranchPlusNested?.complexity}`);
+  check("and its nested ternary belongs to the nested function",
+    byName.helper?.complexity === 2, `got ${byName.helper?.complexity}`);
+  check("nesting never inflates the parent past the child",
+    byName.wrapper.complexity < byName.nested.complexity);
   check("maxComplexity = 6", fc.maxComplexity === 6, `got ${fc.maxComplexity}`);
 }
 

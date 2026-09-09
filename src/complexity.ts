@@ -53,6 +53,20 @@ const DECISION_TYPES = new Set([
 
 const FN_KINDS = new Set(["function", "method"]);
 
+/**
+ * Function-like node types across the supported grammars. Used to find nested
+ * functions so their control flow is scored against *them* and not against
+ * whatever encloses them.
+ */
+const FUNCTION_TYPES = new Set([
+  "function_declaration", "function_definition", "function_expression",
+  "generator_function", "generator_function_declaration",
+  "arrow_function", "lambda", "lambda_expression",
+  "method_definition", "method_declaration", "constructor_declaration",
+  "local_function_statement", "function_item", "func_literal",
+  "anonymous_function_creation_expression", "closure_expression",
+]);
+
 function rate(c: number): ComplexityRating {
   if (c <= 5) return "low";
   if (c <= 10) return "moderate";
@@ -76,6 +90,42 @@ function collectDecisionLines(node: TSNode, out: number[]): void {
   }
 }
 
+interface FnRange { startLine: number; endLine: number; name: string; kind: string }
+
+/** Every function-like node in the tree, with a usable name where one exists. */
+function collectFunctionRanges(node: TSNode, out: FnRange[]): void {
+  if (FUNCTION_TYPES.has(node.type)) {
+    out.push({
+      startLine: node.startPosition.row + 1,
+      endLine: node.endPosition.row + 1,
+      name: nameOfFunction(node),
+      kind: node.type.includes("method") || node.type.includes("constructor") ? "method" : "function",
+    });
+  }
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (c) collectFunctionRanges(c, out);
+  }
+}
+
+/**
+ * A name for a function node: its own `name` field, else the variable it is
+ * assigned to (`const handler = () => {}`), else an anonymous marker so a
+ * complex callback is still findable by line.
+ */
+function nameOfFunction(node: TSNode): string {
+  const own = node.childForFieldName("name");
+  if (own?.text) return own.text;
+  // walk up past the value position to a declarator/pair that names it
+  let p = node.parent;
+  for (let hops = 0; p && hops < 3; hops++, p = p.parent) {
+    const id = p.childForFieldName("name") ?? p.childForFieldName("key")
+      ?? p.childForFieldName("left") ?? p.childForFieldName("declarator");
+    if (id?.text && !id.text.includes("\n")) return id.text;
+  }
+  return `<anonymous>:${node.startPosition.row + 1}`;
+}
+
 function flatten(symbols: SymbolNode[], acc: SymbolNode[] = []): SymbolNode[] {
   for (const s of symbols) {
     acc.push(s);
@@ -85,9 +135,17 @@ function flatten(symbols: SymbolNode[], acc: SymbolNode[] = []): SymbolNode[] {
 }
 
 /**
- * Compute cyclomatic complexity for every function/method in a file.
- * Complexity is attributed by line range, so a function's score includes the
- * control flow of any closures/nested functions declared inside it.
+ * Compute cyclomatic complexity for every function in a file.
+ *
+ * Each function is scored on *its own* control flow: decision points inside a
+ * nested function count against that function, not against its enclosing one.
+ * Attributing by raw line range instead made any function that declares a
+ * callback read as complex, and made extracting a nested helper — the most
+ * common refactor in this language — change nothing.
+ *
+ * Nested functions are reported as entries in their own right, named after the
+ * binding they are assigned to where there is one, so complexity moved into a
+ * closure stays visible rather than disappearing from the total.
  */
 export async function computeFileComplexity(
   absPath: string,
@@ -104,23 +162,39 @@ export async function computeFileComplexity(
   const opts = resolveOptions({ detail: "outline", emitHtml: false });
   const skel = await buildSkeleton(absPath, relPath, opts);
 
-  const functions: FunctionComplexity[] = flatten(skel.symbols)
-    .filter((s) => FN_KINDS.has(s.kind))
-    .map((s) => {
-      const count = decisionLines.filter(
-        (l) => l >= s.range.startLine && l <= s.range.endLine,
+  const fnRanges: FnRange[] = [];
+  collectFunctionRanges(root, fnRanges);
+
+  // Prefer the skeleton's names for top-level functions/methods — they carry the
+  // qualified form ("MyClass.render") — and fall back to the AST for the nested
+  // ones the skeleton does not model.
+  const named = new Map<string, string>();
+  for (const s of flatten(skel.symbols)) {
+    if (FN_KINDS.has(s.kind)) named.set(`${s.range.startLine}`, s.name);
+  }
+
+  const functions: FunctionComplexity[] = fnRanges
+    .map((fn) => {
+      // Ranges strictly inside this one belong to a nested function.
+      const nested = fnRanges.filter(
+        (o) => o !== fn && o.startLine > fn.startLine && o.endLine <= fn.endLine,
+      );
+      const own = decisionLines.filter(
+        (l) =>
+          l >= fn.startLine && l <= fn.endLine &&
+          !nested.some((o) => l >= o.startLine && l <= o.endLine),
       ).length;
-      const complexity = 1 + count;
+      const complexity = 1 + own;
       return {
-        name: s.name,
-        kind: s.kind,
-        startLine: s.range.startLine,
-        endLine: s.range.endLine,
+        name: named.get(`${fn.startLine}`) ?? fn.name,
+        kind: fn.kind,
+        startLine: fn.startLine,
+        endLine: fn.endLine,
         complexity,
         rating: rate(complexity),
       };
     })
-    .sort((a, b) => b.complexity - a.complexity);
+    .sort((a, b) => b.complexity - a.complexity || a.startLine - b.startLine);
 
   const maxComplexity = functions.reduce((m, f) => Math.max(m, f.complexity), 0);
   const averageComplexity =

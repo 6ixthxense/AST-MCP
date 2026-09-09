@@ -89,6 +89,34 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ## [Unreleased]
 
+### Fixed — complexity is per function, and nested functions are visible
+
+`computeFileComplexity` attributed decision points by line range, so every
+branch inside a closure counted against whatever enclosed it, and the closure
+itself was never listed. Two consequences, both bad in a language where
+callbacks are everywhere:
+
+* Any function that declared a helper read as complex whether or not it had
+  control flow of its own. A `wrapper` containing one four-branch arrow scored
+  5; it now scores 1, and the arrow is reported as `nested` at 4.
+* Functions not nested inside a named one were missed entirely. Every
+  `.action(...)` body in `cli.ts` — the implementation of all 32 CLI commands —
+  was invisible to the metric. Seven of them are above cx 15.
+* Extracting a nested helper, the commonest refactor in this codebase, moved the
+  number by exactly nothing, so the metric could not see the improvement it was
+  supposedly asking for.
+
+Each function is now scored on its own branches, with anything belonging to a
+strictly-nested function subtracted, and nested functions appear as their own
+entries — named after the binding they are assigned to (`const handler = ...`)
+or as `<anonymous>:<line>` when there is none, so complexity moved into a
+closure stays findable rather than disappearing.
+
+On this repo the counted function population goes 478 -> 1009 and three
+previously hidden closures join the very-high band. Reported numbers will move
+for any project; `maxComplexity` can only fall or stay, and the population can
+only grow.
+
 ### Changed — the health score is size-independent
 
 Every lever in `ast-map report` / `get_codebase_report` was a raw count against a
