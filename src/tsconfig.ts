@@ -190,7 +190,9 @@ export function aliasCandidates(importFrom: string, fromAbs: string): string[] {
       importFrom.endsWith(p.suffix)
     ) {
       const star = importFrom.slice(p.prefix.length, importFrom.length - p.suffix.length);
-      return p.targets.map((t) => t.replace("*", star));
+      // `star` carries the import's POSIX separators ("components/Button") — normalize
+      // so the candidate is not a mixed-separator path on Windows.
+      return p.targets.map((t) => path.normalize(t.replace("*", star)));
     }
   }
   return [];

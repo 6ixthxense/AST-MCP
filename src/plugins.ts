@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { SkeletonFile } from "./types.js";
 
 // ─── Plugin API ───────────────────────────────────────────────────────────────
@@ -49,7 +50,9 @@ export async function loadPlugins(root: string): Promise<AstMapPlugin[]> {
   for (const file of files) {
     const abs = path.resolve(dir, file);
     try {
-      const mod = await import(abs) as { default?: AstMapPlugin; plugin?: AstMapPlugin } | AstMapPlugin;
+      // Must be a file:// URL — the ESM loader reads a bare "C:\..." path as a
+      // URL scheme and rejects it (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+      const mod = await import(pathToFileURL(abs).href) as { default?: AstMapPlugin; plugin?: AstMapPlugin } | AstMapPlugin;
       const plugin: AstMapPlugin | undefined =
         "default" in mod && isPlugin(mod.default) ? mod.default
         : "plugin" in mod && isPlugin(mod.plugin) ? mod.plugin
