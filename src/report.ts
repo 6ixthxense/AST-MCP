@@ -29,8 +29,12 @@ export interface ReportData {
     testFiles: number;
     sourceFiles: number;
     testedSources: number;
-    /** testedSources / sourceFiles (0–1). */
+    /** testedSources / sourceFiles (0–1) — files a test names directly. */
     coverageRatio: number;
+    /** Sources pulled in transitively by a directly-tested file. */
+    reachedSources: number;
+    /** (tested + reached) / sourceFiles (0–1). */
+    reachRatio: number;
     untestedCount: number;
     /** Top untested sources, ranked by risk (fan-in, then symbols). */
     untested: UntestedSource[];
@@ -116,7 +120,10 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   score -= Math.min(28, veryHigh * 4 + high * 1);
   score -= Math.min(12, god.filter((g) => g.importCount >= 8).length * 4);
   score -= Math.min(10, layerViolations.length);
-  score -= Math.min(8, Math.round((1 - cov.coverageRatio) * 8)); // structural test coverage
+  // Penalise on *reach*: a source no test file names but that a tested file
+  // imports is still exercised. Scoring on coverageRatio punished every
+  // integration-style suite for the naming heuristic rather than a real gap.
+  score -= Math.min(8, Math.round((1 - cov.reachRatio) * 8)); // structural test coverage
   score = Math.max(0, Math.round(score));
 
   const languages = [...langCount.entries()]
@@ -143,6 +150,8 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
       sourceFiles: cov.sourceFiles,
       testedSources: cov.testedSources,
       coverageRatio: cov.coverageRatio,
+      reachedSources: cov.reachedSources,
+      reachRatio: cov.reachRatio,
       untestedCount: cov.untestedSources,
       untested: cov.untested.slice(0, 12),
       rootFallback,
@@ -196,11 +205,15 @@ export function buildReportHtml(d: ReportData): string {
     ? d.modules.map((m) => bar(`${m.module}  ·  ${m.files} file(s)`, m.instability, 1, instColor(m.instability), `Ca ${m.afferent} · Ce ${m.efferent} · <b>I ${m.instability.toFixed(2)}</b>`)).join("")
     : `<div class="empty">No cross-module imports.</div>`;
   const covPct = Math.round(d.testCoverage.coverageRatio * 100);
-  const covC = d.testCoverage.coverageRatio >= 0.7 ? "#1d9e75" : d.testCoverage.coverageRatio >= 0.4 ? "#ba7517" : "#e24b4a";
+  const reachPct = Math.round(d.testCoverage.reachRatio * 100);
+  const shade = (p: number) => (p >= 70 ? "#1d9e75" : p >= 40 ? "#ba7517" : "#e24b4a");
   const covHead = d.testCoverage.testFiles > 0
     ? bar(
-        `${d.testCoverage.testedSources}/${d.testCoverage.sourceFiles} sources tested · ${d.testCoverage.testFiles} test file(s)${d.testCoverage.rootFallback ? " (from project root)" : ""}`,
-        covPct, 100, covC, `<b>${covPct}%</b>`)
+        `Reached by a test · ${d.testCoverage.testFiles} test file(s)${d.testCoverage.rootFallback ? " (from project root)" : ""}`,
+        reachPct, 100, shade(reachPct), `<b>${reachPct}%</b>`)
+      + bar(
+        `Named directly by a test${reachPct - covPct >= 20 ? "  ·  integration-style suite" : ""}`,
+        covPct, 100, shade(covPct), `<b>${covPct}%</b>`)
     : "";
   const covList = d.testCoverage.testFiles === 0
     ? `<div class="empty">No test files found in the scanned directory or project root.</div>`
@@ -255,7 +268,7 @@ export function buildReportHtml(d: ReportData): string {
   ${statCard("Dead exports", d.dead.count, d.dead.count ? "#d85a30" : "#1d9e75")}
   ${statCard("Cycles", d.cycles.count, d.cycles.count ? "#e24b4a" : "#1d9e75")}
   ${statCard("SDP violations", d.layerViolations.count, d.layerViolations.count ? "#d85a30" : "#1d9e75")}
-  ${statCard("Test coverage", covPct + "%", covC)}
+  ${statCard("Test reach", reachPct + "%", shade(reachPct))}
 </div>
 <div class="card"><h2>Language breakdown</h2>${langs}</div>
 <div class="card"><h2>Complexity hotspots</h2>${hotspots}</div>

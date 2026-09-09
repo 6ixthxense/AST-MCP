@@ -82,7 +82,7 @@ The workhorse is **`analyze`**, which covers twelve structural questions behind 
 | `coupling` | per-file Ca / Ce / instability |
 | `modules` | the same, per directory, plus cross-module edges |
 | `layers` | where stable code depends on volatile code (SDP breaks) |
-| `tests` | which sources have no test touching them |
+| `tests` | which sources no test names — and which none even *reaches* |
 | `complexity` | which functions are the hairiest |
 | `unused-params` | which parameters are declared and never read |
 | `risk` | churn × complexity — what's most worth refactoring |

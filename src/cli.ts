@@ -730,7 +730,7 @@ program
     fs.writeFileSync(out, buildReportHtml(data), "utf8");
     header(`Code Health \u2014 ${rel}/  ${dim(`(${data.fileCount} files)`)}`);
     const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
-    console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max} · tests ${Math.round(data.testCoverage.coverageRatio * 100)}%`));
+    console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max} · tests ${Math.round(data.testCoverage.reachRatio * 100)}% reached`));
     console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
     console.log();
   });
@@ -1254,8 +1254,17 @@ program
 
     header(`Test Coverage — ${rel}/  ${dim(`(${map.testFiles} test files · ${map.sourceFiles} sources)`)}`);
     const pct = Math.round(map.coverageRatio * 100);
+    const reachPct = Math.round(map.reachRatio * 100);
     const pcolor = pct >= 70 ? green : pct >= 40 ? yellow : red;
-    console.log(indent(`${bold("Covered:")} ${pcolor(`${map.testedSources}/${map.sourceFiles} (${pct}%)`)} of source files have at least one test`));
+    const rcolor = reachPct >= 70 ? green : reachPct >= 40 ? yellow : red;
+    console.log(indent(`${bold("Named by a test:")} ${pcolor(`${map.testedSources}/${map.sourceFiles} (${pct}%)`)}`));
+    console.log(indent(
+      `${bold("Reached by a test:")} ${rcolor(`${map.testedSources + map.reachedSources}/${map.sourceFiles} (${reachPct}%)`)}` +
+        dim(`  +${map.reachedSources} pulled in transitively`),
+    ));
+    if (reachPct - pct >= 20) {
+      console.log(indent(dim("Integration-style suite: the first number counts only files a test names directly.")));
+    }
 
     if (!opts.untested && opts.links && map.links.length > 0) {
       console.log(`\n${indent(bold("Links:"))}`);

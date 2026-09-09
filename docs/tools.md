@@ -103,7 +103,7 @@ single-purpose tools that existed through v1.x.
 | `coupling` | Per-**file** Ca (fan-in) / Ce (fan-out) / instability `I = Ce/(Ca+Ce)`. | |
 | `modules` | The same metrics per **directory**, plus weighted cross-module edges. | |
 | `layers` | Stable Dependencies Principle breaks: a stable file importing a volatile one. | `minGap` (0) |
-| `tests` | Which sources have tests and which don't, untested ranked by risk. File-level, not line coverage. | `untestedOnly` |
+| `tests` | Two numbers: sources a test **names** (`coverageRatio`) and sources a test **reaches** through imports (`reachRatio`). Untested ranked by risk. File-level, not line coverage. | `untestedOnly` |
 | `complexity` | Cyclomatic complexity per function + worst hotspots. Accepts a single **file**. | |
 | `unused-params` | Parameters declared but never referenced. Accepts a single **file**. | |
 | `risk` | git churn × complexity — the files most worth refactoring or testing. Needs a git repo. | |
@@ -124,6 +124,14 @@ single-purpose tools that existed through v1.x.
   ]
 }
 ```
+
+**On `kind: "tests"` and what it can see.** A source counts as *named* only when a test
+file imports it directly or the filenames pair up (`auth.test.ts` → `auth.ts`). Integration
+suites exercise far more than they name, so that number alone reads far too low for them —
+which is why `reachRatio` also counts everything a named file imports, transitively, and why
+`analyze kind="tests"` reports `reached` with the chain each file was reached from. Neither
+number is line coverage: a reached file is *loaded* by a test, not necessarily asserted on.
+Use `untested` — files nothing names and nothing reaches — as the list that actually matters.
 
 For a one-shot summary spanning several kinds at once, use
 [`get_codebase_report`](#get_codebase_report) instead.

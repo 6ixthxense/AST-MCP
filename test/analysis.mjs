@@ -420,7 +420,11 @@ console.log("\n=== Symbol Search ===");
 
   // Test-coverage card (v1.28.0)
   check("report includes test-coverage data", data.testCoverage && typeof data.testCoverage.coverageRatio === "number");
-  check("report html renders the test-coverage card + stat tile", (html.match(/Test coverage/g) || []).length >= 2);
+  // GRAPH_DIR has no test files, so the card shows the empty state; the stat tile still renders.
+  check("report html renders the coverage stat tile", html.includes("Test reach"));
+  check("no-tests report says so instead of showing 0%", html.includes("No test files found"));
+  check("report exposes both coverage numbers",
+    typeof data.testCoverage.reachRatio === "number" && data.testCoverage.reachRatio >= data.testCoverage.coverageRatio);
 
   // Root fallback: report on src/ only — tests live under the root's tests/ dir.
   const TM = path.join(__dirname, "fixtures", "testmap");
@@ -432,10 +436,15 @@ console.log("\n=== Symbol Search ===");
   );
   check("src-only report coverage = 2/4", tmReport.testCoverage.coverageRatio === 0.5, `ratio=${tmReport.testCoverage.coverageRatio}`);
   check(
-    "untested in report ranked by fan-in (core.ts first)",
-    tmReport.testCoverage.untested[0]?.file === "src/core.ts",
+    "src-only report reaches core.ts, leaving only orphanmod.ts untested",
+    tmReport.testCoverage.reachRatio === 0.75 &&
+      tmReport.testCoverage.untested.length === 1 &&
+      tmReport.testCoverage.untested[0]?.file === "src/orphanmod.ts",
     JSON.stringify(tmReport.testCoverage.untested),
   );
+  check("report html shows both coverage bars when tests exist",
+    (() => { const h = buildReportHtml(tmReport);
+      return h.includes("Reached by a test") && h.includes("Named directly by a test"); })());
   const tmHtml = buildReportHtml(tmReport);
   check("coverage card notes root fallback", tmHtml.includes("(from project root)"));
 }
@@ -643,13 +652,23 @@ console.log("\n=== Symbol Search ===");
     "name link: util.spec.ts → util.ts (no import needed)",
     map.links.some((l) => l.test === "tests/util.spec.ts" && l.source === "src/util.ts" && l.via === "name"),
   );
-  check("coverage ratio 2/4 = 0.5", map.coverageRatio === 0.5, `ratio=${map.coverageRatio}`);
+  check("coverage ratio 2/4 = 0.5 (files a test names)", map.coverageRatio === 0.5, `ratio=${map.coverageRatio}`);
+
+  // core.ts has no test of its own, but mylib.ts and util.ts both import it and
+  // both are tested — running their tests runs core.ts. It is reached, not untested.
+  check("reach ratio 3/4 = 0.75 (adds transitively imported sources)",
+    map.reachRatio === 0.75, `reach=${map.reachRatio}`);
+  check("core.ts is reached at depth 1, not untested",
+    map.reachedSources === 1 && map.reached[0].file === "src/core.ts" && map.reached[0].depth === 1,
+    JSON.stringify(map.reached));
+  check("reached names the tested file the chain starts from",
+    ["src/mylib.ts", "src/util.ts"].includes(map.reached[0].from), map.reached[0]?.from);
   check(
-    "untested ranked by fan-in: core.ts (Ca=2) before orphanmod.ts",
-    map.untested.length === 2 && map.untested[0].file === "src/core.ts" && map.untested[0].afferent === 2 &&
-      map.untested[1].file === "src/orphanmod.ts",
+    "only orphanmod.ts is genuinely untested (nothing imports it, no test names it)",
+    map.untested.length === 1 && map.untested[0].file === "src/orphanmod.ts",
     JSON.stringify(map.untested),
   );
+  check("reach never counts a source twice", map.testedSources + map.reachedSources + map.untested.length === map.sourceFiles);
   check("orphan test detected (e2e-flow)", map.orphanTests.length === 1 && map.orphanTests[0] === "tests/e2e-flow.test.ts");
 }
 

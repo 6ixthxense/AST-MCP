@@ -6,6 +6,42 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.1] — 2026-09-09
+
+### Fixed
+
+- **The README's first command started the MCP server instead of the CLI.**
+  `npx universal-ast-mapper report src/` resolves to the stdio server binary, which
+  ignores its arguments and waits for JSON-RPC — so the first thing a new user copied
+  looked like a hang. It is `npx -p universal-ast-mapper ast-map report src/`.
+- **A bad `AST_MAP_ROOT` started cleanly and then failed every tool call** with a
+  per-call error that never named the cause. The server now warns once at startup.
+
+### Changed — test coverage counts what a test reaches, not just what it names
+
+`analyze kind="tests"` / `ast-map tests` previously counted a source as covered only when
+a test file imported it directly or the filenames paired up. Integration-style suites
+exercise far more than they name, so the number read far too low — this repo's own 514
+assertions scored 14%.
+
+Coverage is now reported as two numbers:
+
+- `coverageRatio` — sources a test **names** (unchanged meaning, unchanged field).
+- `reachRatio` — sources a test **reaches**, following imports transitively from every
+  named file. New `reached[]` lists each one with the tested file its chain starts from
+  and how many imports away it is.
+
+`untested` now means *nothing names it and nothing reaches it*, which is the list worth
+acting on. The health score penalises on reach rather than naming, so a project is no
+longer marked down for the heuristic's blind spot instead of a real gap. On this repo:
+14% named / 77% reached, and the untested list dropped from 42 files to the 12 that are
+genuinely untouched.
+
+Neither number is line coverage — a reached file is loaded by a test, not necessarily
+asserted on. `docs/tools.md` says so plainly.
+
+---
+
 ## [2.0.0] — 2026-09-09 · Tool surface cut in half
 
 ### Breaking — twelve MCP tools folded into `analyze`
