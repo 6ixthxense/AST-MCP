@@ -49,7 +49,7 @@ function grammarWasmPath(grammar: string): string {
   return path.join(pkgDir("tree-sitter-wasms/package.json"), "out", `tree-sitter-${grammar}.wasm`);
 }
 
-export async function initParser(): Promise<void> {
+async function initParser(): Promise<void> {
   if (!initPromise) {
     const coreDir = pkgDir("web-tree-sitter/package.json");
     initPromise = P.init({

@@ -54,11 +54,11 @@ Parse the arguments after `/ast-map`:
 
 | Command | MCP Tool | CLI fallback |
 |---------|----------|-------------|
-| dead | `find_dead_code` | `ast-map dead <dir>` |
-| cycles | `find_circular_deps` | `ast-map cycles <dir>` |
+| dead | `analyze kind="dead"` | `ast-map dead <dir>` |
+| cycles | `analyze kind="cycles"` | `ast-map cycles <dir>` |
 | validate | `validate_architecture` | `ast-map validate <path>` |
 | skeleton | `get_skeleton_json` | `ast-map skeleton <file>` |
-| top | `get_top_symbols` | `ast-map top <dir>` |
+| top | `analyze kind="top"` | `ast-map top <dir>` |
 | impact | `get_change_impact` | `ast-map impact <file> <symbol>` |
 | calls | `get_call_graph` | `ast-map calls <file> <fn>` |
 | search | `search_symbol` | `ast-map search <name> <dir>` |

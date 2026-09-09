@@ -3,10 +3,10 @@ import { collectSourceFiles } from "./skeleton.js";
 import { buildSkeletonsBulk } from "./pool.js";
 import { resolveOptions } from "./config.js";
 import { buildSymbolGraph } from "./graph.js";
+import { esc } from "./html.js";
+import { findLayerViolations, type LayerViolation, computeModuleCoupling, type ModuleMetric } from "./metrics.js";
 import { findDeadExports, findCircularDeps, getTopSymbols } from "./graph-analysis.js";
 import type { FunctionComplexity } from "./complexity.js";
-import { findLayerViolations, type LayerViolation } from "./layers.js";
-import { computeModuleCoupling, type ModuleMetric } from "./modulecoupling.js";
 import type { SkeletonFile } from "./types.js";
 import { mapTestCoverage, isTestFile, isFixtureFile, type UntestedSource } from "./testmap.js";
 
@@ -155,10 +155,6 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
 const GRADE_COLOR: Record<string, string> = {
   A: "#1d9e75", B: "#1d9e75", C: "#ba7517", D: "#d85a30", F: "#e24b4a",
 };
-
-function esc(s: string): string {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function ratingColor(r: string): string {
   return r === "very-high" ? "#e24b4a" : r === "high" ? "#d85a30" : r === "moderate" ? "#ba7517" : "#1d9e75";

@@ -14,8 +14,9 @@ const KIND_COLORS: Record<SymbolKind, string> = {
   namespace: "#9333ea",
 };
 
-function esc(s: string): string {
-  return s
+/** HTML-escape a text node or attribute value. Shared with report.ts. */
+export function esc(s: string): string {
+  return String(s)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

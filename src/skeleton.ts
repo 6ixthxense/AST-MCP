@@ -118,6 +118,11 @@ export async function buildSkeleton(
   return result;
 }
 
+/** Native path → the forward-slash form used in every skeleton/graph id. */
+export function toPosix(p: string): string {
+  return p.split(path.sep).join("/");
+}
+
 /** Recursively collect supported source files under a directory. */
 export function collectSourceFiles(absDir: string, opts: SkeletonOptions): string[] {
   const supported = new Set(supportedExtensions());

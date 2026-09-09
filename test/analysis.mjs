@@ -28,9 +28,7 @@ const { readSourceMap } = await import("../dist/sourcemap.js");
 const { buildReport, buildReportHtml } = await import("../dist/report.js");
 const { computeDiff, computeRisk, isGitRepo } = await import("../dist/gitdiff.js");
 const { packContext } = await import("../dist/contextpack.js");
-const { computeCoupling } = await import("../dist/coupling.js");
-const { findLayerViolations } = await import("../dist/layers.js");
-const { computeModuleCoupling } = await import("../dist/modulecoupling.js");
+const { computeCoupling, findLayerViolations, computeModuleCoupling } = await import("../dist/metrics.js");
 const { resolveOptions } = await import("../dist/config.js");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -488,6 +486,11 @@ console.log("\n=== Symbol Search ===");
   check("dependency signatures included", pack.dependencies.some((d) => d.symbols.some((x) => x.name === "hashPassword" && x.signature)));
   check("dependents include router.ts", pack.dependents.some((d) => d.file === "router.ts"));
   check("token estimate is small (minimal pack)", pack.tokenEstimate > 0 && pack.tokenEstimate < 400);
+  check("baseline counts the whole seed + dependency files", pack.baselineTokens > pack.tokenEstimate);
+  check("savedPercent matches the two token counts",
+    pack.savedPercent === Math.round((1 - pack.tokenEstimate / pack.baselineTokens) * 100));
+  check("savedPercent in range", pack.savedPercent > 0 && pack.savedPercent <= 100);
+  check("note quotes the savings", pack.note.includes(`${pack.savedPercent}% less`));
 }
 
 // ─── Coupling metrics ─────────────────────────────────────────────────────────
@@ -648,6 +651,62 @@ console.log("\n=== Symbol Search ===");
     JSON.stringify(map.untested),
   );
   check("orphan test detected (e2e-flow)", map.orphanTests.length === 1 && map.orphanTests[0] === "tests/e2e-flow.test.ts");
+}
+
+// ─── Incremental watch rebuild ────────────────────────────────────────────────
+// `ast-map watch` keeps skeletons in a Map and re-parses only the file that
+// changed. The graph it produces must be identical to a full re-gather — this
+// is the invariant that breaks if the cache key or deletion path drifts.
+{
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-inc-"));
+  const w = (rel, body) => {
+    const p = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body);
+    return p;
+  };
+  w("util.ts", "export function helper() { return 1; }\n");
+  w("main.ts", 'import { helper } from "./util.js";\nexport function run() { return helper(); }\n');
+  const extra = w("extra.ts", "export const GONE = 1;\n");
+
+  const opts = resolveOptions({ detail: "outline", emitHtml: false });
+  const gather = async () => {
+    const out = [];
+    for (const f of collectSourceFiles(dir, opts)) {
+      out.push(await buildSkeleton(f, path.relative(dir, f).split(path.sep).join("/"), opts));
+    }
+    return out;
+  };
+  const sig = (g) => JSON.stringify({
+    nodes: g.nodes.map((n) => n.id).sort(),
+    edges: g.edges.map((e) => `${e.edgeType} ${e.from} -> ${e.to}`).sort(),
+  });
+
+  // Seed the cache the way watch does on startup.
+  const cache = new Map();
+  for (const s of await gather()) cache.set(s.file, s);
+  check("incremental seed matches full gather",
+    sig(buildSymbolGraph([...cache.values()], dir)) === sig(buildSymbolGraph(await gather(), dir)));
+
+  // Edit one file: re-parse only it.
+  w("util.ts", "export function helper() { return 2; }\nexport function added() { return 3; }\n");
+  cache.set("util.ts", await buildSkeleton(path.join(dir, "util.ts"), "util.ts", opts));
+  check("after one edit, incremental === full re-gather",
+    sig(buildSymbolGraph([...cache.values()], dir)) === sig(buildSymbolGraph(await gather(), dir)));
+  check("edited file's new symbol is in the graph",
+    buildSymbolGraph([...cache.values()], dir).nodes.some((n) => n.id.endsWith("::added")));
+
+  // Delete a file: watch drops it from the cache instead of re-walking.
+  fs.rmSync(extra);
+  cache.delete("extra.ts");
+  check("after a delete, incremental === full re-gather",
+    sig(buildSymbolGraph([...cache.values()], dir)) === sig(buildSymbolGraph(await gather(), dir)));
+  check("deleted file is gone from the graph",
+    !buildSymbolGraph([...cache.values()], dir).nodes.some((n) => n.id.startsWith("extra.ts")));
+
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

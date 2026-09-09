@@ -17,7 +17,7 @@ export interface SkeletonOptions {
   maxFileBytes: number;
 }
 
-export const DEFAULT_IGNORE = [
+const DEFAULT_IGNORE = [
   "node_modules",
   "vendor",
   ".git",

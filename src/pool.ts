@@ -4,8 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { SkeletonFile } from "./types.js";
-import type { SkeletonOptions } from "./config.js";
-import { buildSkeleton } from "./skeleton.js";
+import { resolveOptions, type SkeletonOptions } from "./config.js";
+import { buildSkeleton, collectSourceFiles, toPosix } from "./skeleton.js";
 import { computeFileComplexity, type FileComplexity } from "./complexity.js";
 import { diskCacheDir } from "./diskcache.js";
 
@@ -139,4 +139,39 @@ export async function buildSkeletonsBulk(
     }
   }
   return out;
+}
+
+/**
+ * Scan a directory and build every skeleton in it — the entry point for all
+ * directory-level analysis (graph, coupling, dead code, …). Goes through the
+ * worker pool, so every caller gets parallel parsing for free.
+ */
+export async function gatherSkeletons(
+  dirAbs: string,
+  root: string,
+  detail: "outline" | "full" = "outline",
+): Promise<{ skeletons: SkeletonFile[]; errors: Array<{ file: string; error: string }> }> {
+  const opts = resolveOptions({ detail, emitHtml: false });
+  const items = collectSourceFiles(dirAbs, opts).map((abs) => ({
+    abs,
+    rel: toPosix(path.relative(root, abs)),
+  }));
+  const built = await buildSkeletonsBulk(items, opts);
+
+  const skeletons: SkeletonFile[] = [];
+  const errors: Array<{ file: string; error: string }> = [];
+  for (let i = 0; i < built.length; i++) {
+    if (built[i]) {
+      skeletons.push(built[i]!.skel);
+      continue;
+    }
+    // Rare path: the pool reports failures as null, so re-parse the one file
+    // to recover its message for the caller's error list.
+    try {
+      skeletons.push(await buildSkeleton(items[i].abs, items[i].rel, opts));
+    } catch (e) {
+      errors.push({ file: items[i].rel, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { skeletons, errors };
 }

@@ -1,7 +1,7 @@
 import type { TSNode } from "../parser.js";
 import type { SymbolNode, SymbolKind } from "../types.js";
 
-export function lineRange(node: TSNode) {
+function lineRange(node: TSNode) {
   return { startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1 };
 }
 

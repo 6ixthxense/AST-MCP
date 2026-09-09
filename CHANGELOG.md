@@ -6,6 +6,76 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [2.0.0] — 2026-09-09 · Tool surface cut in half
+
+### Breaking — twelve MCP tools folded into `analyze`
+
+`find_dead_code`, `find_circular_deps`, `find_duplicate_symbols`, `get_top_symbols`,
+`get_coupling`, `get_module_coupling`, `get_layer_violations`, `get_test_coverage`,
+`get_complexity`, `find_unused_params`, `get_risk_map` and `analyze_workspace` are gone.
+All twelve are now `analyze({ kind, path, … })`:
+
+| was | now |
+|---|---|
+| `find_dead_code` | `analyze kind="dead"` |
+| `find_circular_deps` | `analyze kind="cycles"` |
+| `find_duplicate_symbols` | `analyze kind="duplicates"` |
+| `get_top_symbols` | `analyze kind="top"` |
+| `get_coupling` | `analyze kind="coupling"` |
+| `get_module_coupling` | `analyze kind="modules"` |
+| `get_layer_violations` | `analyze kind="layers"` |
+| `get_test_coverage` | `analyze kind="tests"` |
+| `get_complexity` | `analyze kind="complexity"` |
+| `find_unused_params` | `analyze kind="unused-params"` |
+| `get_risk_map` | `analyze kind="risk"` |
+| `analyze_workspace` | `analyze kind="workspace"` |
+
+Response shapes are unchanged, so a client only has to rename the call. Per-tool options
+(`limit`, `minGap`, `untestedOnly`, `detail`) are now optional inputs on `analyze`, and the
+graph-backed kinds all return the same `directory` / `scanned` / `errors` envelope.
+
+**Why:** the twelve had identical input schemas and differed only in the analysis they ran,
+so the model paid ~6.2k tokens of tool schema every session to choose between thirty
+near-identical options. Now: **30 → 19 tools, 6,192 → 4,755 schema tokens (−23%)**.
+
+**The CLI is unchanged** — `ast-map dead`, `ast-map cycles`, `ast-map coupling` and the rest
+all still exist. Typing a subcommand was never the problem.
+
+### Faster `ast-map watch`
+
+Skeletons now live across rebuilds, so saving a file re-parses only that file instead of
+re-gathering the tree. On a 2,000-file project: **~1.15s → ~0.32s per save (3.4×)**. A burst
+of changes (branch switch, formatter) re-parses each file once and rebuilds the graph once.
+
+### `pack_context` reports what it saves
+
+New `baselineTokens` and `savedPercent` alongside `tokenEstimate` — what reading the seed
+file plus every dependency in full would have cost. Measured on this repo: 51–98% fewer
+tokens, ~90% typical.
+
+### Fixed
+
+- **tsconfig path aliases produced mixed-separator paths on Windows.** `@/components/Button`
+  resolved to `…\src\components/Button.tsx` because the import's tail was substituted into
+  the target without normalizing. Single-segment aliases (`#u/fmt`) were unaffected, which is
+  why this survived so long.
+- **`npm test` exited non-zero on Windows** even when every assertion passed —
+  web-tree-sitter's emscripten runtime aborts in libuv teardown. The new `test/run-all.mjs`
+  judges by assertion output and reports the abort separately.
+
+### Internal
+
+- `coupling.ts` + `layers.ts` + `modulecoupling.ts` → one `metrics.ts`; the import-edge walk
+  they each carried is now shared.
+- All directory scans go through `gatherSkeletons()`, so every one of them uses the worker
+  pool instead of parsing sequentially.
+- `npm test` runs `test/run-all.mjs`, which picks up every `test/*.mjs` automatically —
+  five test files were previously only run by CI and could drift.
+- 46 `RELEASE_NOTES_*.md` files removed (this changelog already covers them); the MCP tool
+  reference moved to `docs/tools.md`.
+
+---
+
 ## [1.30.0] — 2026-06-16 · Graph explorer phase 2 — analysis overlays
 
 ### Graph / Explorer (`buildExplorerHtml`)

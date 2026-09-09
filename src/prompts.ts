@@ -27,11 +27,11 @@ export function registerPrompts(server: McpServer): void {
       userPrompt(
         `Run a full architecture audit of \`${d(dir)}\` using the ast-mapper tools, in this order:\n\n` +
           `1. \`build_symbol_graph\` on \`${d(dir)}\` to load the dependency graph.\n` +
-          `2. \`get_top_symbols\` — identify the 5 most-imported symbols (the "God Nodes").\n` +
-          `3. \`find_circular_deps\` — report any circular import chains.\n` +
+          `2. \`analyze kind="top"\` — identify the 5 most-imported symbols (the "God Nodes").\n` +
+          `3. \`analyze kind="cycles"\` — report any circular import chains.\n` +
           `4. \`validate_architecture\` — list structural rule violations (large files, too many imports, god exports).\n` +
-          `5. \`get_module_coupling\` — which directories are load-bearing (high Ca) vs. volatile (high I)?\n` +
-          `6. \`get_layer_violations\` — any stable code depending on volatile code (SDP breaks)?\n\n` +
+          `5. \`analyze kind="modules"\` — which directories are load-bearing (high Ca) vs. volatile (high I)?\n` +
+          `6. \`analyze kind="layers"\` — any stable code depending on volatile code (SDP breaks)?\n\n` +
           `Then write a short prioritized summary: the top 3 architectural risks and a concrete first step for each.`,
       ),
   );
@@ -66,7 +66,7 @@ export function registerPrompts(server: McpServer): void {
     ({ dir }) =>
       userPrompt(
         `Help me remove dead code from \`${d(dir)}\` using the ast-mapper tools:\n\n` +
-          `1. \`find_dead_code\` on \`${d(dir)}\` — list exported symbols nobody imports.\n` +
+          `1. \`analyze kind="dead"\` on \`${d(dir)}\` — list exported symbols nobody imports.\n` +
           `2. For each HIGH-confidence result, double-check with \`get_change_impact\` (should be empty).\n` +
           `3. Before suggesting deletion, show the symbol's source with \`get_symbol_context\`.\n\n` +
           `Produce a deletion checklist: only symbols that are high-confidence AND have zero impact. Flag anything dynamic (string-referenced, re-exported) as "verify manually".`,
@@ -84,8 +84,8 @@ export function registerPrompts(server: McpServer): void {
       userPrompt(
         `Give me a health check of \`${d(dir)}\` using the ast-mapper tools:\n\n` +
           `1. \`get_codebase_report\` on \`${d(dir)}\` — overall grade A–F, hotspots, god nodes, dead code, cycles.\n` +
-          `2. \`get_risk_map\` — the files with the highest churn × complexity (best refactor / test targets).\n` +
-          `3. \`get_layer_violations\` — stable files depending on volatile ones.\n\n` +
+          `2. \`analyze kind="risk"\` — the files with the highest churn × complexity (best refactor / test targets).\n` +
+          `3. \`analyze kind="layers"\` — stable files depending on volatile ones.\n\n` +
           `Summarize as: the grade, the single biggest problem, and the 3 files I should touch first to improve it.`,
       ),
   );
@@ -101,8 +101,8 @@ export function registerPrompts(server: McpServer): void {
       userPrompt(
         `I'm new to this codebase. Walk me through \`${d(dir)}\` using the ast-mapper tools:\n\n` +
           `1. \`list_supported_languages\` then \`generate_skeleton\` on \`${d(dir)}\` — what languages and overall shape?\n` +
-          `2. \`get_top_symbols\` — the most-depended-on symbols are the concepts to learn first.\n` +
-          `3. \`get_module_coupling\` — how do the directories relate; what's the stable core?\n` +
+          `2. \`analyze kind="top"\` — the most-depended-on symbols are the concepts to learn first.\n` +
+          `3. \`analyze kind="modules"\` — how do the directories relate; what's the stable core?\n` +
           `4. For the top God Node, \`get_symbol_context\` with related symbols to see how it's used.\n\n` +
           `Then write a 5-bullet "start here" orientation: what this code does, its core abstractions, and where to begin reading.`,
       ),

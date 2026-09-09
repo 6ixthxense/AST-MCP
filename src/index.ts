@@ -8,14 +8,15 @@ import { fileURLToPath } from "node:url";
 
 import { resolveOptions, loadProjectConfig, type SkeletonOptions } from "./config.js";
 import { initDiskCache, defaultCacheDir } from "./diskcache.js";
-import { buildSkeletonsBulk } from "./pool.js";
+import { buildSkeletonsBulk, gatherSkeletons } from "./pool.js";
 import {
   buildSkeleton,
   collectSourceFiles,
+  toPosix,
   UnsupportedLanguageError,
 } from "./skeleton.js";
 import { renderHtml, renderCombinedHtml } from "./html.js";
-import { detectLanguage, supportedLanguages } from "./registry.js";
+import { supportedLanguages } from "./registry.js";
 import type { SkeletonFile } from "./types.js";
 import {
   findSymbol,
@@ -29,6 +30,7 @@ import {
 } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
+import { computeCoupling, findLayerViolations, computeModuleCoupling } from "./metrics.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
@@ -43,9 +45,6 @@ import { buildReport } from "./report.js";
 import { runQualityGate } from "./check.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
-import { computeCoupling } from "./coupling.js";
-import { findLayerViolations } from "./layers.js";
-import { computeModuleCoupling } from "./modulecoupling.js";
 import { registerPrompts } from "./prompts.js";
 
 import { parseRootsFromEnv, resolvePathInRoots, type ResolvedPath } from "./roots.js";
@@ -77,6 +76,28 @@ function writeHtml(skel: SkeletonFile, rel: string, opts: SkeletonOptions): stri
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, renderHtml(skel), "utf8");
   return target;
+}
+
+/** Run a per-file analysis over a directory, collecting results and per-file errors. */
+async function perFile<T>(
+  absDir: string,
+  root: string,
+  fn: (abs: string, rel: string) => Promise<T | null>,
+): Promise<{ results: T[]; errors: Array<{ file: string; error: string }>; count: number }> {
+  const opts = resolveOptions({ detail: "outline", emitHtml: false });
+  const files = collectSourceFiles(absDir, opts);
+  const results: T[] = [];
+  const errors: Array<{ file: string; error: string }> = [];
+  for (const file of files) {
+    const fileRel = toPosix(path.relative(root, file));
+    try {
+      const r = await fn(file, fileRel);
+      if (r) results.push(r);
+    } catch (err) {
+      errors.push({ file: fileRel, error: describeError(err) });
+    }
+  }
+  return { results, errors, count: files.length };
 }
 
 function jsonText(value: unknown): { content: { type: "text"; text: string }[] } {
@@ -192,7 +213,7 @@ server.registerTool(
         let totalSymbols = 0;
         const items = files.map((file) => ({
           abs: file,
-          rel: path.relative(root, file).split(path.sep).join("/"),
+          rel: toPosix(path.relative(root, file)),
         }));
         const built = await buildSkeletonsBulk(items, opts);
         for (let i = 0; i < built.length; i++) {
@@ -226,7 +247,7 @@ server.registerTool(
         return jsonText({
           mode: "directory",
           root: root,
-          directory: rel.split(path.sep).join("/"),
+          directory: toPosix(rel),
           fileCount: files.length,
           totalSymbols,
           combinedHtmlPath,
@@ -366,7 +387,7 @@ server.registerTool(
       const violations: Violation[] = [];
 
       for (const file of filesToCheck) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(root, file));
         let source: string;
         try {
           source = fs.readFileSync(file, "utf8");
@@ -506,20 +527,7 @@ server.registerTool(
         return errorText(`"${input}" is not a directory. build_symbol_graph requires a directory.`);
       }
 
-      const opts = resolveOptions({ detail, emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-
-      const skeletons: SkeletonFile[] = [];
-      const errors: Array<{ file: string; error: string }> = [];
-
-      for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
-        try {
-          skeletons.push(await buildSkeleton(file, fileRel, opts));
-        } catch (err) {
-          errors.push({ file: fileRel, error: describeError(err) });
-        }
-      }
+      const { skeletons, errors } = await gatherSkeletons(abs, root, detail);
 
       const graph = buildSymbolGraph(skeletons, root);
 
@@ -529,7 +537,7 @@ server.registerTool(
         fs.writeFileSync(outAbs, JSON.stringify(graph, null, 2), "utf8");
         return jsonText({
           directory: rel,
-          scanned: files.length,
+          scanned: skeletons.length + errors.length,
           graphFilePath: outAbs,
           stats: graph.stats,
           ...(errors.length > 0 ? { errors } : {}),
@@ -542,7 +550,7 @@ server.registerTool(
       if (graph.nodes.length > INLINE_NODE_LIMIT) {
         return jsonText({
           directory: rel,
-          scanned: files.length,
+          scanned: skeletons.length + errors.length,
           stats: graph.stats,
           warning:
             `Graph has ${graph.nodes.length} nodes — too large to return inline. ` +
@@ -553,7 +561,7 @@ server.registerTool(
 
       return jsonText({
         directory: rel,
-        scanned: files.length,
+        scanned: skeletons.length + errors.length,
         ...(errors.length > 0 ? { errors } : {}),
         graph,
       });
@@ -563,268 +571,163 @@ server.registerTool(
   },
 );
 
-/* ─────────────────── tool: find_dead_code ──────────────────────────────── */
+/* ─────────────────── tool: analyze ─────────────────────────────────────── */
 server.registerTool(
-  "find_dead_code",
+  "analyze",
   {
-    title: "Find dead (unreferenced) exports",
+    title: "Analyze a directory (dead code, cycles, coupling, complexity, …)",
     description:
-      "Scan a directory, build the import graph, and return exported symbols that are never " +
-      "imported by any other file in the scan root. These are candidates for removal.\n" +
-      "Note: entry-point symbols (e.g. Next.js page exports) are technically 'dead' within " +
-      "the codebase graph — use your judgement before deleting them.",
+      "Run one structural analysis over a directory. Pick `kind`:\n" +
+      "• `dead` — exported symbols no other file imports (removal candidates; entry points look dead too).\n" +
+      "• `cycles` — circular import chains (A → B → C → A), full path per cycle.\n" +
+      "• `duplicates` — one symbol name exported from several files (copy-paste, parallel impls).\n" +
+      "• `top` — the most-imported symbols, i.e. God Nodes with the widest blast radius. `limit` (default 10).\n" +
+      "• `coupling` — per-FILE Ca (fan-in) / Ce (fan-out) / instability I=Ce/(Ca+Ce).\n" +
+      "• `modules` — the same metrics aggregated per DIRECTORY, plus weighted cross-module edges. " +
+      "Use this for the architectural bird's-eye view; use `coupling` to find the individual load-bearing file.\n" +
+      "• `layers` — Stable Dependencies Principle breaks: a stable file importing a more volatile one. " +
+      "`minGap` (0-1) filters by how far uphill the dependency points.\n" +
+      "• `tests` — which sources have tests (by import or naming convention) and which do not, " +
+      "untested ranked by risk. File-level, not line coverage. `untestedOnly` trims the response.\n" +
+      "• `complexity` — cyclomatic complexity per function plus the worst hotspots. Accepts a single FILE.\n" +
+      "• `unused-params` — declared parameters never referenced in the body. Accepts a single FILE.\n" +
+      "• `risk` — git churn × complexity, ranking the files most worth refactoring or testing. Needs a git repo.\n" +
+      "• `workspace` — monorepo packages (npm/yarn/pnpm/lerna), their internal deps, and package cycles.\n\n" +
+      "For a one-shot health summary across several of these at once, use get_codebase_report instead.",
     inputSchema: {
+      kind: z
+        .enum([
+          "dead", "cycles", "duplicates", "top", "coupling", "modules",
+          "layers", "tests", "complexity", "unused-params", "risk", "workspace",
+        ])
+        .describe("Which analysis to run — see the description for what each returns."),
       path: z
         .string()
-        .describe("Directory to scan, relative to project root or absolute within it."),
+        .optional()
+        .describe("Directory to scan (a FILE is allowed for complexity / unused-params). Default project root."),
+      limit: z.number().int().min(1).max(100).optional().describe("`top` only: how many symbols. Default 10."),
+      minGap: z.number().optional().describe("`layers` only: minimum instability gap, 0-1. Default 0."),
+      untestedOnly: z.boolean().optional().describe("`tests` only: return just the untested list. Default false."),
       detail: z
         .enum(["outline", "full"])
         .optional()
-        .describe('"outline" (default) is sufficient for dead-code detection.'),
+        .describe('`dead` only: parse detail. "outline" (default) is enough.'),
     },
   },
-  async ({ path: input, detail }) => {
+  async ({ kind, path: input, limit, minGap, untestedOnly, detail }) => {
     try {
-      const { abs, rel, root } = resolveInRoot(input);
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. find_dead_code requires a directory.`);
+      const { abs, rel, root } = resolveInRoot(input ?? ".");
+      const dir = toPosix(rel) || ".";
+      const isDir = fs.statSync(abs).isDirectory();
+
+      // complexity / unused-params also accept a single file; the rest need a directory.
+      if (!isDir && kind !== "complexity" && kind !== "unused-params") {
+        return errorText(`"${input}" is not a directory. analyze kind="${kind}" requires a directory.`);
       }
 
-      const opts = resolveOptions({ detail, emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skeletons: SkeletonFile[] = [];
-      const errors: Array<{ file: string; error: string }> = [];
-
-      for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
-        try {
-          skeletons.push(await buildSkeleton(file, fileRel, opts));
-        } catch (err) {
-          errors.push({ file: fileRel, error: describeError(err) });
-        }
-      }
-
-      const graph = buildSymbolGraph(skeletons, root);
-      const dead = findDeadExports(graph);
-
-      return jsonText({
-        directory: rel.split(path.sep).join("/"),
-        scanned: files.length,
-        deadExportCount: dead.length,
-        ...(errors.length > 0 ? { errors } : {}),
-        deadExports: dead,
+      // Built once, only for the kinds that walk the import graph.
+      let cached: { skeletons: SkeletonFile[]; errors: Array<{ file: string; error: string }> } | null = null;
+      const gather = async () => (cached ??= await gatherSkeletons(abs, root, detail));
+      const graphOf = async () => {
+        const g = await gather();
+        return { graph: buildSymbolGraph(g.skeletons, root), ...g };
+      };
+      /** Common envelope for the graph-backed kinds. */
+      const scanned = (g: { skeletons: SkeletonFile[]; errors: Array<unknown> }) => ({
+        directory: dir,
+        scanned: g.skeletons.length + g.errors.length,
+        ...(g.errors.length > 0 ? { errors: g.errors } : {}),
       });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
 
-/* ─────────────────── tool: find_circular_deps ──────────────────────────── */
-server.registerTool(
-  "find_circular_deps",
-  {
-    title: "Find circular import dependencies",
-    description:
-      "Scan a directory and detect circular import chains (A → B → C → A). " +
-      "Each result includes the full cycle path with repeated start node at the end for clarity.",
-    inputSchema: {
-      path: z
-        .string()
-        .describe("Directory to scan, relative to project root or absolute within it."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input);
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. find_circular_deps requires a directory.`);
-      }
-
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skeletons: SkeletonFile[] = [];
-      const errors: Array<{ file: string; error: string }> = [];
-
-      for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
-        try {
-          skeletons.push(await buildSkeleton(file, fileRel, opts));
-        } catch (err) {
-          errors.push({ file: fileRel, error: describeError(err) });
+      switch (kind) {
+        case "dead": {
+          const g = await graphOf();
+          const dead = findDeadExports(g.graph);
+          return jsonText({ ...scanned(g), deadExportCount: dead.length, deadExports: dead });
         }
-      }
-
-      const graph = buildSymbolGraph(skeletons, root);
-      const cycles = findCircularDeps(graph);
-
-      return jsonText({
-        directory: rel.split(path.sep).join("/"),
-        scanned: files.length,
-        cycleCount: cycles.length,
-        ...(errors.length > 0 ? { errors } : {}),
-        cycles,
-      });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: find_duplicate_symbols ──────────────────────── */
-server.registerTool(
-  "find_duplicate_symbols",
-  {
-    title: "Find duplicate exported symbols",
-    description:
-      "Scan a directory and return symbol names that are exported from more than one file. " +
-      "These are often accidental collisions (copy-paste, parallel implementations) that make " +
-      "a codebase harder to navigate. Each result lists every file/kind that declares the name.",
-    inputSchema: {
-      path: z
-        .string()
-        .describe("Directory to scan, relative to project root or absolute within it."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input);
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. find_duplicate_symbols requires a directory.`);
-      }
-
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skeletons: SkeletonFile[] = [];
-      const errors: Array<{ file: string; error: string }> = [];
-
-      for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
-        try {
-          skeletons.push(await buildSkeleton(file, fileRel, opts));
-        } catch (err) {
-          errors.push({ file: fileRel, error: describeError(err) });
+        case "cycles": {
+          const g = await graphOf();
+          const cycles = findCircularDeps(g.graph);
+          return jsonText({ ...scanned(g), cycleCount: cycles.length, cycles });
         }
-      }
-
-      const graph = buildSymbolGraph(skeletons, root);
-      const duplicates = findDuplicateSymbols(graph);
-
-      return jsonText({
-        directory: rel.split(path.sep).join("/"),
-        scanned: files.length,
-        duplicateCount: duplicates.length,
-        ...(errors.length > 0 ? { errors } : {}),
-        duplicates,
-      });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_complexity ──────────────────────────────── */
-server.registerTool(
-  "get_complexity",
-  {
-    title: "Get cyclomatic complexity per function",
-    description:
-      "Compute AST-based cyclomatic complexity for every function/method in a FILE or DIRECTORY. " +
-      "Each function gets a score (1 + decision points: if / for / while / case / catch / ternary / && / ||) " +
-      "and a rating (low <=5, moderate <=10, high <=20, very-high >20). For a directory, returns per-file " +
-      "results plus the highest-complexity hotspots across the scan.",
-    inputSchema: {
-      path: z.string().describe("File or directory, relative to project root or absolute within it."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input);
-      const stat = fs.statSync(abs);
-
-      if (stat.isDirectory()) {
-        const opts = resolveOptions({ detail: "outline", emitHtml: false });
-        const files = collectSourceFiles(abs, opts);
-        const results = [];
-        const errors: Array<{ file: string; error: string }> = [];
-        for (const file of files) {
-          const fileRel = path.relative(root, file).split(path.sep).join("/");
-          try {
-            const fc = await computeFileComplexity(file, fileRel);
-            if (fc) results.push(fc);
-          } catch (err) {
-            errors.push({ file: fileRel, error: describeError(err) });
+        case "duplicates": {
+          const g = await graphOf();
+          const duplicates = findDuplicateSymbols(g.graph);
+          return jsonText({ ...scanned(g), duplicateCount: duplicates.length, duplicates });
+        }
+        case "top": {
+          const g = await graphOf();
+          return jsonText({ ...scanned(g), topSymbols: getTopSymbols(g.graph, limit ?? 10) });
+        }
+        case "coupling": {
+          const g = await graphOf();
+          const metrics = computeCoupling(g.graph);
+          return jsonText({ ...scanned(g), count: metrics.length, files: metrics });
+        }
+        case "modules": {
+          const g = await graphOf();
+          const mc = computeModuleCoupling(g.graph);
+          return jsonText({ ...scanned(g), moduleCount: mc.modules.length, ...mc });
+        }
+        case "layers": {
+          const g = await graphOf();
+          const violations = findLayerViolations(g.graph, minGap ?? 0);
+          return jsonText({ ...scanned(g), count: violations.length, violations });
+        }
+        case "tests": {
+          const g = await graphOf();
+          const map = mapTestCoverage(g.graph);
+          return jsonText(untestedOnly
+            ? { ...scanned(g), untestedSources: map.untestedSources, coverageRatio: map.coverageRatio, untested: map.untested }
+            : { ...scanned(g), ...map });
+        }
+        case "complexity": {
+          if (!isDir) {
+            const fc = await computeFileComplexity(abs, dir);
+            return fc ? jsonText(fc) : errorText(`Unsupported file type: ${input}`);
           }
+          const { results, errors, count } = await perFile(abs, root, computeFileComplexity);
+          const hotspots = results
+            .flatMap((r) => r.functions.map((f) => ({ file: r.file, ...f })))
+            .sort((a, b) => b.complexity - a.complexity)
+            .slice(0, 15);
+          return jsonText({
+            directory: dir, scanned: count,
+            ...(errors.length > 0 ? { errors } : {}),
+            hotspots, files: results,
+          });
         }
-        const hotspots = results
-          .flatMap((r) => r.functions.map((f) => ({ file: r.file, ...f })))
-          .sort((a, b) => b.complexity - a.complexity)
-          .slice(0, 15);
-        return jsonText({
-          directory: rel.split(path.sep).join("/"),
-          scanned: files.length,
-          ...(errors.length > 0 ? { errors } : {}),
-          hotspots,
-          files: results,
-        });
-      }
-
-      const fc = await computeFileComplexity(abs, rel.split(path.sep).join("/"));
-      if (!fc) return errorText(`Unsupported file type: ${input}`);
-      return jsonText(fc);
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: find_unused_params ──────────────────────────── */
-server.registerTool(
-  "find_unused_params",
-  {
-    title: "Find unused function parameters",
-    description:
-      "Scan a FILE or DIRECTORY for named functions/methods that declare parameters never " +
-      "referenced in their body. Skips `_`-prefixed params (conventionally intentional), " +
-      "anonymous callbacks, and destructured bindings to avoid false positives.",
-    inputSchema: {
-      path: z.string().describe("File or directory, relative to project root or absolute within it."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input);
-      const stat = fs.statSync(abs);
-
-      if (stat.isDirectory()) {
-        const opts = resolveOptions({ detail: "outline", emitHtml: false });
-        const files = collectSourceFiles(abs, opts);
-        const results = [];
-        const errors: Array<{ file: string; error: string }> = [];
-        for (const file of files) {
-          const fileRel = path.relative(root, file).split(path.sep).join("/");
-          try {
-            const r = await findUnusedParams(file, fileRel);
-            if (r && r.functions.length > 0) results.push(r);
-          } catch (err) {
-            errors.push({ file: fileRel, error: describeError(err) });
+        case "unused-params": {
+          if (!isDir) {
+            const r = await findUnusedParams(abs, dir);
+            return r ? jsonText(r) : errorText(`Unsupported file type: ${input}`);
           }
+          const { results, errors, count } = await perFile(abs, root, findUnusedParams);
+          const withHits = results.filter((r) => r.functions.length > 0);
+          return jsonText({
+            directory: dir, scanned: count,
+            ...(errors.length > 0 ? { errors } : {}),
+            unusedParamCount: withHits.reduce((s, r) => s + r.functions.reduce((a, f) => a + f.unused.length, 0), 0),
+            files: withHits,
+          });
         }
-        const unusedParamCount = results.reduce(
-          (sum, r) => sum + r.functions.reduce((a, f) => a + f.unused.length, 0), 0,
-        );
-        return jsonText({
-          directory: rel.split(path.sep).join("/"),
-          scanned: files.length,
-          ...(errors.length > 0 ? { errors } : {}),
-          unusedParamCount,
-          files: results,
-        });
+        case "risk": {
+          if (!isGitRepo(root)) return errorText("Not a git repository (or git is unavailable).");
+          const files = await computeRisk(abs, root);
+          return jsonText({ directory: dir, count: files.length, files: files.slice(0, 50) });
+        }
+        case "workspace": {
+          const info = discoverWorkspace(abs);
+          return jsonText({
+            root: dir,
+            tool: info.tool,
+            packageCount: info.packages.length,
+            packages: info.packages,
+            edges: info.edges,
+            packageCycles: findPackageCycles(info),
+          });
+        }
       }
-
-      const r = await findUnusedParams(abs, rel.split(path.sep).join("/"));
-      if (!r) return errorText(`Unsupported file type: ${input}`);
-      return jsonText(r);
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -856,7 +759,7 @@ server.registerTool(
       const refs = [];
       const errors: Array<{ file: string; error: string }> = [];
       for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(root, file));
         try {
           refs.push(...(await traceTypeInFile(file, fileRel, typeName)));
         } catch (err) {
@@ -867,47 +770,12 @@ server.registerTool(
       for (const r of refs) byRole[r.role]++;
       return jsonText({
         type: typeName,
-        directory: rel.split(path.sep).join("/"),
+        directory: toPosix(rel),
         scanned: files.length,
         refCount: refs.length,
         byRole,
         ...(errors.length > 0 ? { errors } : {}),
         refs,
-      });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: analyze_workspace ───────────────────────────── */
-server.registerTool(
-  "analyze_workspace",
-  {
-    title: "Analyze a monorepo workspace",
-    description:
-      "Discover the packages in a JS/TS monorepo (npm/yarn `workspaces`, pnpm-workspace.yaml, or " +
-      "lerna.json) and the dependency edges between them. Returns each package's name, directory, " +
-      "and workspace-internal dependencies, plus any circular dependencies between packages.",
-    inputSchema: {
-      path: z.string().optional().describe("Workspace root directory. Defaults to the project root."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input ?? ".");
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. analyze_workspace requires a directory.`);
-      }
-      const info = discoverWorkspace(abs);
-      const cycles = findPackageCycles(info);
-      return jsonText({
-        root: rel.split(path.sep).join("/") || ".",
-        tool: info.tool,
-        packageCount: info.packages.length,
-        packages: info.packages,
-        edges: info.edges,
-        packageCycles: cycles,
       });
     } catch (err) {
       return errorText(describeError(err));
@@ -931,7 +799,7 @@ server.registerTool(
   async ({ path: input }) => {
     try {
       const { abs, rel, root } = resolveInRoot(input);
-      const info = readSourceMap(abs, rel.split(path.sep).join("/"));
+      const info = readSourceMap(abs, toPosix(rel));
       if (!info) return errorText(`No source map found for "${input}".`);
       return jsonText(info);
     } catch (err) {
@@ -961,7 +829,7 @@ server.registerTool(
         return errorText(`"${input}" is not a directory. get_codebase_report requires a directory.`);
       }
       const data = await buildReport(abs, root);
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
+      return jsonText({ directory: toPosix(rel) || ".", ...data });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -997,7 +865,7 @@ server.registerTool(
         thresholds,
         updateBaseline,
       });
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...result });
+      return jsonText({ directory: toPosix(rel) || ".", ...result });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -1023,32 +891,7 @@ server.registerTool(
       const { abs, rel, root } = resolveInRoot(input ?? ".");
       if (!isGitRepo(root)) return errorText("Not a git repository (or git is unavailable).");
       const data = await computeDiff(abs, root, base ?? "HEAD");
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", ...data });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_risk_map ────────────────────────────────── */
-server.registerTool(
-  "get_risk_map",
-  {
-    title: "Refactor risk map (churn \u00d7 complexity)",
-    description:
-      "Rank files by refactor risk = git churn (number of commits touching the file) \u00d7 the file's " +
-      "max function complexity. Surfaces the files that are both frequently changed and complex \u2014 " +
-      "the most valuable refactor / test targets.",
-    inputSchema: {
-      path: z.string().optional().describe("Directory to scan. Default project root."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input ?? ".");
-      if (!isGitRepo(root)) return errorText("Not a git repository (or git is unavailable).");
-      const files = await computeRisk(abs, root);
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: files.length, files: files.slice(0, 50) });
+      return jsonText({ directory: toPosix(rel) || ".", ...data });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -1075,113 +918,8 @@ server.registerTool(
       const { abs, rel, root } = resolveInRoot(input);
       if (fs.statSync(abs).isDirectory()) return errorText(`"${input}" is a directory; pass a file.`);
       const scanAbs = scan ? resolveInRoot(scan).abs : root;
-      const pack = await packContext(abs, rel.split(path.sep).join("/"), root, symbol, scanAbs);
+      const pack = await packContext(abs, toPosix(rel), root, symbol, scanAbs);
       return jsonText(pack);
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_coupling ────────────────────────────────── */
-server.registerTool(
-  "get_coupling",
-  {
-    title: "Coupling metrics (afferent / efferent / instability)",
-    description:
-      "Compute Robert C. Martin's coupling metrics per file from the import graph: afferent coupling " +
-      "(Ca, fan-in), efferent coupling (Ce, fan-out), and instability I = Ce/(Ca+Ce) (0 = stable, " +
-      "1 = unstable). High-Ca files are load-bearing; high-instability files change freely.",
-    inputSchema: {
-      path: z.string().optional().describe("Directory to scan. Default project root."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input ?? ".");
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. get_coupling requires a directory.`);
-      }
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skels: SkeletonFile[] = [];
-      for (const f of files) {
-        const r = path.relative(root, f).split(path.sep).join("/");
-        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
-      }
-      const metrics = computeCoupling(buildSymbolGraph(skels, root));
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: metrics.length, files: metrics });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_layer_violations ────────────────────────── */
-server.registerTool(
-  "get_layer_violations",
-  {
-    title: "Layer violations (Stable Dependencies Principle)",
-    description:
-      "Find dependencies that point the wrong way on the stability gradient: a stable file " +
-      "(low instability) that imports a more volatile file (high instability). Per Robert C. Martin's " +
-      "Stable Dependencies Principle, stable code should not depend on volatile code — it gets dragged " +
-      "along every time the volatile file churns. Results are sorted by severity (the instability gap).",
-    inputSchema: {
-      path: z.string().optional().describe("Directory to scan. Default project root."),
-      minGap: z.number().optional().describe("Only report violations whose instability gap exceeds this (0-1). Default 0."),
-    },
-  },
-  async ({ path: input, minGap }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input ?? ".");
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. get_layer_violations requires a directory.`);
-      }
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skels: SkeletonFile[] = [];
-      for (const f of files) {
-        const r = path.relative(root, f).split(path.sep).join("/");
-        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
-      }
-      const violations = findLayerViolations(buildSymbolGraph(skels, root), minGap ?? 0);
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", count: violations.length, violations });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_module_coupling ─────────────────────────── */
-server.registerTool(
-  "get_module_coupling",
-  {
-    title: "Module coupling (directory-level Ca / Ce / instability)",
-    description:
-      "Aggregate the import graph up to the directory/module level: per-module afferent (Ca) / " +
-      "efferent (Ce) coupling and instability, plus the weighted inter-module edges. Intra-module " +
-      "imports (files importing siblings in the same directory) are ignored — only cross-module " +
-      "dependencies count. The architectural bird's-eye view above per-file coupling.",
-    inputSchema: {
-      path: z.string().optional().describe("Directory to scan. Default project root."),
-    },
-  },
-  async ({ path: input }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input ?? ".");
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. get_module_coupling requires a directory.`);
-      }
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skels: SkeletonFile[] = [];
-      for (const f of files) {
-        const r = path.relative(root, f).split(path.sep).join("/");
-        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
-      }
-      const mc = computeModuleCoupling(buildSymbolGraph(skels, root));
-      return jsonText({ directory: rel.split(path.sep).join("/") || ".", moduleCount: mc.modules.length, ...mc });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -1224,7 +962,7 @@ server.registerTool(
       const skeletons: SkeletonFile[] = [];
 
       for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(root, file));
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch {
@@ -1233,7 +971,7 @@ server.registerTool(
       }
 
       const graph = buildSymbolGraph(skeletons, root);
-      const targetNodeId = `${rel.split(path.sep).join("/")}::${symbol}`;
+      const targetNodeId = `${toPosix(rel)}::${symbol}`;
       const impact = getChangeImpact(graph, targetNodeId);
 
       if (!impact) {
@@ -1289,7 +1027,7 @@ server.registerTool(
       const skeletons: SkeletonFile[] = [];
 
       for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(root, file));
         try {
           skeletons.push(await buildSkeleton(file, fileRel, opts));
         } catch {
@@ -1348,7 +1086,7 @@ server.registerTool(
       }
       const matches = await searchSymbols(abs, name, root, { matchType, kind, exportedOnly });
       return jsonText({
-        directory: rel.split(path.sep).join("/"),
+        directory: toPosix(rel),
         pattern: name,
         matchCount: matches.length,
         matches,
@@ -1397,52 +1135,11 @@ server.registerTool(
       }
       const matches = await semanticSearch(abs, query, root, { limit, kind, exportedOnly });
       return jsonText({
-        directory: rel.split(path.sep).join("/"),
+        directory: toPosix(rel),
         query,
         matchCount: matches.length,
         matches,
       });
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_test_coverage ───────────────────────────── */
-server.registerTool(
-  "get_test_coverage",
-  {
-    title: "Test-coverage map (tests ↔ sources)",
-    description:
-      "Structural test coverage: pair test files with the source files they exercise and list " +
-      "source files no test touches. Two signals: a test file *importing* a source file " +
-      "(definitive) and naming conventions (auth.test.ts → auth.ts, test_utils.py → utils.py). " +
-      "No instrumentation or test runner needed. Untested files are ranked by risk " +
-      "(fan-in, then symbol count). This is file-level coverage, not line coverage.",
-    inputSchema: {
-      path: z.string().optional().describe("Directory to scan (should include the test files). Default project root."),
-      untestedOnly: z.boolean().optional().describe("Return only the untested-sources list. Default false."),
-    },
-  },
-  async ({ path: input, untestedOnly }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input ?? ".");
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. get_test_coverage requires a directory.`);
-      }
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skels: SkeletonFile[] = [];
-      for (const f of files) {
-        const r = path.relative(root, f).split(path.sep).join("/");
-        try { skels.push(await buildSkeleton(f, r, opts)); } catch { /* skip */ }
-      }
-      const map = mapTestCoverage(buildSymbolGraph(skels, root));
-      const dir = rel.split(path.sep).join("/") || ".";
-      if (untestedOnly) {
-        return jsonText({ directory: dir, untestedSources: map.untestedSources, coverageRatio: map.coverageRatio, untested: map.untested });
-      }
-      return jsonText({ directory: dir, ...map });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -1478,65 +1175,16 @@ server.registerTool(
       const files = collectSourceFiles(scanRoot, opts);
       const skeletons: SkeletonFile[] = [];
       for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(root, file));
         try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
       }
       const graph = buildSymbolGraph(skeletons, root);
-      const fileId = rel.split(path.sep).join("/");
+      const fileId = toPosix(rel);
       const result = getFileDeps(graph, fileId);
       if (!result) {
         return errorText(`"${rel}" was not found in the graph. Ensure it is inside the scan directory and is a supported source file.`);
       }
       return jsonText(result);
-    } catch (err) {
-      return errorText(describeError(err));
-    }
-  },
-);
-
-/* ─────────────────── tool: get_top_symbols ─────────────────────────────── */
-server.registerTool(
-  "get_top_symbols",
-  {
-    title: "Get most-imported symbols (God Node detector)",
-    description:
-      "Scan a directory and return the N symbols that are imported by the most files. " +
-      "These are your codebase's 'God Nodes' — high-coupling, high-risk symbols where a " +
-      "breaking change would have maximum blast radius. Use before a major refactor to " +
-      "identify which symbols need the most care.",
-    inputSchema: {
-      path: z
-        .string()
-        .describe("Directory to scan, relative to project root or absolute within it."),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(100)
-        .optional()
-        .describe("Number of top symbols to return. Default 10."),
-    },
-  },
-  async ({ path: input, limit }) => {
-    try {
-      const { abs, rel, root } = resolveInRoot(input);
-      if (!fs.statSync(abs).isDirectory()) {
-        return errorText(`"${input}" is not a directory. get_top_symbols requires a directory.`);
-      }
-      const opts = resolveOptions({ detail: "outline", emitHtml: false });
-      const files = collectSourceFiles(abs, opts);
-      const skeletons: SkeletonFile[] = [];
-      for (const file of files) {
-        const fileRel = path.relative(root, file).split(path.sep).join("/");
-        try { skeletons.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
-      }
-      const graph = buildSymbolGraph(skeletons, root);
-      const top = getTopSymbols(graph, limit ?? 10);
-      return jsonText({
-        directory: rel.split(path.sep).join("/"),
-        scanned: files.length,
-        topSymbols: top,
-      });
     } catch (err) {
       return errorText(describeError(err));
     }
@@ -1578,7 +1226,7 @@ server.registerResource(
       const files = collectSourceFiles(ROOT, opts);
       return {
         resources: files.map((f) => {
-          const rel = path.relative(ROOT, f).split(path.sep).join("/");
+          const rel = toPosix(path.relative(ROOT, f));
           return { uri: `ast://skeleton/${rel}`, name: rel, mimeType: "application/json" };
         }),
       };
@@ -1593,7 +1241,7 @@ server.registerResource(
     const rel = decodeURIComponent(String(variables.path)).split(path.sep).join("/");
     const { abs, rel: safeRel } = resolveInRoot(rel);
     const opts = resolveOptions({ detail: "outline", emitHtml: false });
-    const skel = await buildSkeleton(abs, safeRel.split(path.sep).join("/"), opts);
+    const skel = await buildSkeleton(abs, toPosix(safeRel), opts);
     return {
       contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(skel, null, 2) }],
     };
@@ -1622,7 +1270,7 @@ server.registerResource(
     }
     const skels: SkeletonFile[] = [];
     for (const file of files) {
-      const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+      const fileRel = toPosix(path.relative(ROOT, file));
       try { skels.push(await buildSkeleton(file, fileRel, opts)); } catch { /* skip */ }
     }
     const graph = buildSymbolGraph(skels, ROOT);

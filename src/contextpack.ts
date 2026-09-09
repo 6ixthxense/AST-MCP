@@ -21,7 +21,12 @@ export interface ContextPack {
   primary: { file: string; symbol?: string; startLine: number; endLine: number; source: string };
   dependencies: { file: string; symbols: { name: string; signature?: string | null }[] }[];
   dependents: { file: string }[];
+  /** Tokens in this pack: the seed symbol's source + dependency signatures. */
   tokenEstimate: number;
+  /** Tokens an agent would spend reading the seed file and every dependency in full. */
+  baselineTokens: number;
+  /** How much the pack saves vs. that baseline, 0–100. */
+  savedPercent: number;
   note: string;
 }
 
@@ -78,12 +83,30 @@ export async function packContext(
   const depTok = dependencies.reduce(
     (a, d) => a + d.symbols.reduce((b, s) => b + tok(s.signature || s.name), 0), 0,
   );
+  const tokenEstimate = tok(source) + depTok;
+
+  // What the agent would have spent reading the seed file plus every dependency
+  // file end to end — the alternative this pack replaces.
+  let baselineTokens = tok(lines.join("\n"));
+  for (const d of dependencies) {
+    try { baselineTokens += tok(fs.readFileSync(path.resolve(root, d.file), "utf8")); }
+    catch { /* unreadable dependency — leave it out of the baseline */ }
+  }
+  const savedPercent = baselineTokens > 0
+    ? Math.max(0, Math.round((1 - tokenEstimate / baselineTokens) * 100))
+    : 0;
+
   return {
     seed: { file: relFile, ...(symbolName ? { symbol: symbolName } : {}) },
     primary: { file: relFile, ...(symbolName ? { symbol: symbolName } : {}), startLine, endLine, source },
     dependencies,
     dependents,
-    tokenEstimate: tok(source) + depTok,
-    note: "Read primary.source in full; for dependencies you usually only need the listed signatures, not the whole files.",
+    tokenEstimate,
+    baselineTokens,
+    savedPercent,
+    note:
+      `This pack is ~${tokenEstimate} tokens vs. ~${baselineTokens} to read the same files in ` +
+      `full (${savedPercent}% less). Read primary.source in full; for dependencies you usually ` +
+      "only need the listed signatures, not the whole files.",
   };
 }

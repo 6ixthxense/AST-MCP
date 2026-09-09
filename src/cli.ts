@@ -3,15 +3,16 @@ import { program } from "commander";
 import path from "node:path";
 import fs from "node:fs";
 
-import { buildSkeleton, collectSourceFiles } from "./skeleton.js";
+import { buildSkeleton, collectSourceFiles, toPosix } from "./skeleton.js";
 import { renderHtml, renderCombinedHtml } from "./html.js";
 import { resolveOptions, loadProjectConfig } from "./config.js";
 import { initDiskCache, defaultCacheDir, diskCacheStats, clearDiskCache } from "./diskcache.js";
-import { buildSkeletonsBulk } from "./pool.js";
+import { gatherSkeletons as gatherFrom } from "./pool.js";
 import { supportedLanguages } from "./registry.js";
 import { findSymbol, findRelatedSymbols, findServerImports, isApiRoute, findMissingTryCatch, checkGeneralRules, GENERAL_RULE_DEFAULTS } from "./analysis.js";
 import { resolveFileImports } from "./resolver.js";
 import { buildSymbolGraph } from "./graph.js";
+import { computeCoupling, findLayerViolations, computeModuleCoupling } from "./metrics.js";
 import { findDeadExports, findCircularDeps, getChangeImpact, getFileDeps, getTopSymbols, findDuplicateSymbols } from "./graph-analysis.js";
 import { computeFileComplexity } from "./complexity.js";
 import { findUnusedParams } from "./unused-params.js";
@@ -23,9 +24,6 @@ import { buildReport, buildReportHtml } from "./report.js";
 import { runQualityGate, BASELINE_FILENAME, type CheckThresholds } from "./check.js";
 import { computeDiff, computeRisk, isGitRepo } from "./gitdiff.js";
 import { packContext } from "./contextpack.js";
-import { computeCoupling } from "./coupling.js";
-import { findLayerViolations } from "./layers.js";
-import { computeModuleCoupling } from "./modulecoupling.js";
 import { buildCallGraph } from "./callgraph.js";
 import { searchSymbols } from "./search.js";
 import { semanticSearch } from "./semantic.js";
@@ -82,16 +80,13 @@ function jsonOut(data: unknown) {
 
 function resolveArg(p: string): { abs: string; rel: string } {
   const abs = path.resolve(ROOT, p);
-  const rel = path.relative(ROOT, abs).split(path.sep).join("/") || ".";
+  const rel = toPosix(path.relative(ROOT, abs)) || ".";
   return { abs, rel };
 }
 
+/** CLI view of the shared gather — parse failures are silently skipped here. */
 async function gatherSkeletons(dirAbs: string, detail: "outline" | "full" = "outline"): Promise<SkeletonFile[]> {
-  const opts = resolveOptions({ detail, emitHtml: false });
-  const files = collectSourceFiles(dirAbs, opts);
-  const items = files.map((f) => ({ abs: f, rel: path.relative(ROOT, f).split(path.sep).join("/") }));
-  const built = await buildSkeletonsBulk(items, opts);
-  return built.filter((r) => r !== null).map((r) => r!.skel);
+  return (await gatherFrom(dirAbs, ROOT, detail)).skeletons;
 }
 
 function die(msg: string): never {
@@ -161,7 +156,7 @@ program
         const errors: string[] = [];
 
         for (const file of files) {
-          const fr = path.relative(ROOT, file).split(path.sep).join("/");
+          const fr = toPosix(path.relative(ROOT, file));
           try {
             const skel = await buildSkeleton(file, fr, skOpts);
             skeletons.push(skel);
@@ -357,7 +352,7 @@ program
     const violations: Violation[] = [];
 
     for (const file of filesToCheck) {
-      const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+      const fileRel = toPosix(path.relative(ROOT, file));
       let source: string;
       try { source = fs.readFileSync(file, "utf8"); } catch { continue; }
 
@@ -456,13 +451,40 @@ program
     const { abs, rel } = resolveArg(dir ?? ".");
     if (!fs.statSync(abs).isDirectory()) die(`"${rel}" is not a directory`);
 
+    // Skeletons live across rebuilds: a save re-parses only the file that
+    // changed, instead of re-gathering the whole tree. On a 2k-file repo that
+    // is the difference between ~1.3s and ~0.4s per keystroke-save.
+    const skelByRel = new Map<string, SkeletonFile>();
+    const watchOpts = resolveOptions({ detail: "outline", emitHtml: false });
+
     let building = false;
-    let queued = false;
-    async function rebuild(reason: string) {
-      if (building) { queued = true; return; }
+    let queued: string | null = null;
+
+    /** Re-parse one changed file into the cache. Returns false if it vanished. */
+    async function refreshOne(fileAbs: string): Promise<boolean> {
+      const fileRel = toPosix(path.relative(ROOT, fileAbs));
+      if (!fs.existsSync(fileAbs)) { skelByRel.delete(fileRel); return false; }
+      try {
+        skelByRel.set(fileRel, await buildSkeleton(fileAbs, fileRel, watchOpts));
+        return true;
+      } catch {
+        skelByRel.delete(fileRel); // unparsable now — drop it from the graph
+        return false;
+      }
+    }
+
+    async function rebuild(reason: string, changedAbs?: string) {
+      if (building) { queued = reason; return; }
       building = true;
       try {
-        const skels = await gatherSkeletons(abs);
+        if (changedAbs) await refreshOne(changedAbs);
+        else {
+          skelByRel.clear();
+          for (const s of await gatherSkeletons(abs)) skelByRel.set(s.file, s);
+        }
+        // ponytail: the graph is still rebuilt whole (~400ms at 2k files).
+        // Make it incremental only if that becomes the bottleneck.
+        const skels = [...skelByRel.values()];
         const graph = buildSymbolGraph(skels, ROOT);
         const dead = findDeadExports(graph).filter((d) => d.confidence === "high").length;
         const cycles = findCircularDeps(graph).length;
@@ -475,7 +497,8 @@ program
         console.log(line);
       } finally {
         building = false;
-        if (queued) { queued = false; rebuild("(coalesced)"); }
+        const again = queued;
+        if (again) { queued = null; void rebuild(again); }
       }
     }
 
@@ -483,14 +506,30 @@ program
     await rebuild("initial");
 
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const pending = new Set<string>();
     const exts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".cs", ".c", ".cpp", ".h", ".hpp", ".kt", ".swift"]);
     fs.watch(abs, { recursive: true }, (_evt, file) => {
       if (!file) return;
-      const f = String(file).split(path.sep).join("/");
+      const f = toPosix(String(file));
       if (/(^|\/)(node_modules|\.git|dist|\.ast-map)(\/|$)/.test(f)) return;
       if (!exts.has(path.extname(f).toLowerCase())) return;
+      pending.add(path.resolve(abs, String(file)));
       if (timer) clearTimeout(timer);
-      timer = setTimeout(() => rebuild(`(${f.split("/").pop()} changed)`), 300);
+      timer = setTimeout(() => {
+        const changed = [...pending];
+        pending.clear();
+        void (async () => {
+          // More than one file in a burst (branch switch, formatter): re-parse
+          // each, then rebuild the graph once.
+          for (const c of changed.slice(0, -1)) await refreshOne(c);
+          const last = changed[changed.length - 1];
+          const name = toPosix(path.relative(abs, last)).split("/").pop();
+          await rebuild(
+            changed.length > 1 ? `(${changed.length} files changed)` : `(${name} changed)`,
+            last,
+          );
+        })();
+      }, 300);
     });
 
     await new Promise(() => {}); // keep the process alive
@@ -526,7 +565,12 @@ program
     const scanAbs = resolveArg(opts.scan).abs;
     const pack = await packContext(abs, rel, ROOT, symbol, scanAbs);
     if (opts.json) return jsonOut(pack);
-    header(`Context Pack \u2014 ${rel}${symbol ? "::" + symbol : ""}  ${dim("(~" + pack.tokenEstimate + " tokens)")}`);
+    header(`Context Pack \u2014 ${rel}${symbol ? "::" + symbol : ""}`);
+    console.log(indent(
+      green(`~${pack.tokenEstimate} tokens`) +
+        dim(` vs ~${pack.baselineTokens} reading the same files in full`) +
+        "  " + bold(`${pack.savedPercent}% less`),
+    ));
     console.log(indent(bold("Primary") + dim(`  lines ${pack.primary.startLine}-${pack.primary.endLine}`)));
     console.log();
     console.log(indent(bold("Depends on:")));
@@ -844,7 +888,7 @@ program
     const sopts = resolveOptions({ detail: "outline", emitHtml: false });
     const refs = [];
     for (const file of collectSourceFiles(abs, sopts)) {
-      const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+      const fileRel = toPosix(path.relative(ROOT, file));
       refs.push(...(await traceTypeInFile(file, fileRel, typeName)));
     }
 
@@ -883,7 +927,7 @@ program
     if (stat.isDirectory()) {
       const sopts = resolveOptions({ detail: "outline", emitHtml: false });
       for (const file of collectSourceFiles(abs, sopts)) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(ROOT, file));
         const r = await findUnusedParams(file, fileRel);
         if (r && r.functions.length > 0) results.push(r);
       }
@@ -928,7 +972,7 @@ program
     if (stat.isDirectory()) {
       const sopts = resolveOptions({ detail: "outline", emitHtml: false });
       for (const file of collectSourceFiles(abs, sopts)) {
-        const fileRel = path.relative(ROOT, file).split(path.sep).join("/");
+        const fileRel = toPosix(path.relative(ROOT, file));
         const fc = await computeFileComplexity(file, fileRel);
         if (fc) fileResults.push(fc);
       }
