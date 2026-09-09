@@ -1,5 +1,5 @@
-import https from "node:https";
 import type { TestGenResult } from "./testgen.js";
+import { callClaude } from "./anthropic.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -22,56 +22,6 @@ export interface AiTestGenResult extends TestGenResult {
 interface AnthropicMessage {
   role: "user" | "assistant";
   content: string;
-}
-
-async function callClaude(prompt: string, opts: AiTestGenOptions): Promise<string> {
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("No Anthropic API key — set ANTHROPIC_API_KEY or pass --api-key");
-
-  const body = JSON.stringify({
-    model: opts.model ?? "claude-sonnet-4-6",
-    max_tokens: opts.maxTokens ?? 4096,
-    messages: [{ role: "user", content: prompt } as AnthropicMessage],
-  });
-
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: "api.anthropic.com",
-        path: "/v1/messages",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          try {
-            const parsed = JSON.parse(raw) as {
-              error?: { message: string };
-              content?: Array<{ type: string; text: string }>;
-            };
-            if (parsed.error) {
-              reject(new Error(`Anthropic API: ${parsed.error.message}`));
-            } else {
-              resolve(parsed.content?.[0]?.text ?? "");
-            }
-          } catch {
-            reject(new Error(`Unexpected API response: ${raw.slice(0, 300)}`));
-          }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
 }
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────

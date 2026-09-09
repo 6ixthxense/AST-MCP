@@ -1,5 +1,5 @@
-import https from "node:https";
 import type { SkeletonFile, SymbolNode } from "./types.js";
+import { callClaude } from "./anthropic.js";
 
 export interface DocSymbol {
   file: string;
@@ -119,48 +119,6 @@ ${rows}
 
 // ─── AI enhancement ───────────────────────────────────────────────────────────
 
-async function callClaude(prompt: string, opts: DocOptions): Promise<string> {
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("No Anthropic API key — set ANTHROPIC_API_KEY or pass --api-key");
-
-  const body = JSON.stringify({
-    model: opts.model ?? "claude-sonnet-4-6",
-    max_tokens: opts.maxTokens ?? 1024,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: "api.anthropic.com",
-        path: "/v1/messages",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          try {
-            const parsed = JSON.parse(raw) as { error?: { message: string }; content?: Array<{ text: string }> };
-            if (parsed.error) reject(new Error(`Anthropic API: ${parsed.error.message}`));
-            else resolve(parsed.content?.[0]?.text ?? "");
-          } catch { reject(new Error("Unexpected API response")); }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
-
 export async function aiEnhanceDocs(output: DocOutput, opts: DocOptions = {}): Promise<DocOutput> {
   const enhanced: DocOutput = {
     ...output,
@@ -188,7 +146,7 @@ Symbols:
 ${symbolList}`;
 
     try {
-      const raw = await callClaude(prompt, opts);
+      const raw = await callClaude(prompt, opts, 1024);
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const descriptions = JSON.parse(jsonMatch[0]) as Record<string, string>;

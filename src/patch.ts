@@ -1,5 +1,5 @@
-import https from "node:https";
 import readline from "node:readline";
+import { callClaude } from "./anthropic.js";
 import fs from "node:fs";
 import type { SmellResult } from "./smells.js";
 import type { SecurityIssue } from "./security.js";
@@ -66,48 +66,6 @@ function coloredDiff(before: string, after: string): string {
 }
 
 // ─── Claude API ───────────────────────────────────────────────────────────────
-
-async function callClaude(prompt: string, opts: PatchOptions): Promise<string> {
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("No Anthropic API key — set ANTHROPIC_API_KEY or pass --api-key");
-
-  const body = JSON.stringify({
-    model: opts.model ?? "claude-sonnet-4-6",
-    max_tokens: opts.maxTokens ?? 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: "api.anthropic.com",
-        path: "/v1/messages",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          try {
-            const parsed = JSON.parse(raw) as { error?: { message: string }; content?: Array<{ text: string }> };
-            if (parsed.error) reject(new Error(`Anthropic API: ${parsed.error.message}`));
-            else resolve(parsed.content?.[0]?.text ?? "");
-          } catch { reject(new Error("Unexpected API response")); }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
 
 // ─── Prompt ───────────────────────────────────────────────────────────────────
 
@@ -184,7 +142,7 @@ async function askYesNo(question: string): Promise<boolean> {
 export async function generatePatch(issue: PatchIssue, opts: PatchOptions = {}): Promise<PatchResult> {
   const label = issueLabel(issue);
   try {
-    const raw = await callClaude(buildPatchPrompt(issue), opts);
+    const raw = await callClaude(buildPatchPrompt(issue), opts, 4096);
     const { before, after, explanation } = parseResponse(raw);
     return { filePath: issue.filePath, issue: label, before, after, explanation, applied: false };
   } catch (e) {

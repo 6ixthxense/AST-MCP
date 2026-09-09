@@ -1,5 +1,5 @@
-import https from "node:https";
 import fs from "node:fs";
+import { callClaude, modelFor } from "./anthropic.js";
 import type { SmellResult } from "./smells.js";
 import type { SecurityIssue } from "./security.js";
 
@@ -31,55 +31,6 @@ export interface AiRefactorOptions {
 }
 
 // ─── Anthropic API ────────────────────────────────────────────────────────────
-
-async function callClaude(prompt: string, opts: AiRefactorOptions): Promise<string> {
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("No Anthropic API key — set ANTHROPIC_API_KEY or pass --api-key");
-
-  const model = opts.model ?? "claude-sonnet-4-6";
-  const body = JSON.stringify({
-    model,
-    max_tokens: opts.maxTokens ?? 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: "api.anthropic.com",
-        path: "/v1/messages",
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          try {
-            const parsed = JSON.parse(raw) as {
-              error?: { message: string };
-              content?: Array<{ type: string; text: string }>;
-              model?: string;
-            };
-            if (parsed.error) reject(new Error(`Anthropic API: ${parsed.error.message}`));
-            else resolve(parsed.content?.[0]?.text ?? "");
-          } catch {
-            reject(new Error(`Unexpected API response: ${raw.slice(0, 300)}`));
-          }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
 
 // ─── Prompt builders ──────────────────────────────────────────────────────────
 
@@ -168,7 +119,7 @@ export async function aiRefactor(
   target: RefactorTarget,
   opts: AiRefactorOptions = {},
 ): Promise<RefactorResult> {
-  const model = opts.model ?? "claude-sonnet-4-6";
+  const model = modelFor(opts);
   let prompt: string;
   let issue: string;
   let symbol: string | undefined;
@@ -184,7 +135,7 @@ export async function aiRefactor(
     throw new Error("Invalid refactor target: must have smell or security");
   }
 
-  const raw = await callClaude(prompt, opts);
+  const raw = await callClaude(prompt, opts, 4096);
   const { before, after, explanation } = parseResponse(raw);
 
   return {
@@ -217,7 +168,7 @@ export async function aiRefactorBatch(
         before: "",
         after: "",
         explanation: "",
-        model: opts.model ?? "claude-sonnet-4-6",
+        model: modelFor(opts),
         error: e instanceof Error ? e.message : String(e),
       });
     }

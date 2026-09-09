@@ -1,5 +1,5 @@
-import https from "node:https";
 import type { SkeletonFile } from "./types.js";
+import { callClaude } from "./anthropic.js";
 
 export interface SymbolVector {
   file: string;
@@ -126,42 +126,10 @@ ${list}
 
 Re-rank these by relevance to the query. Respond ONLY with a JSON array of 1-based indices in order of relevance, e.g. [3, 1, 5, 2, 4].`;
 
-  const body = JSON.stringify({
-    model: opts.model ?? "claude-sonnet-4-6",
-    max_tokens: 256,
-    messages: [{ role: "user", content: prompt }],
-  });
-
+  // Re-ranking is an enhancement, not a requirement: any failure below is
+  // caught and the original order is returned unchanged.
   try {
-    const raw = await new Promise<string>((resolve, reject) => {
-      const req = https.request(
-        {
-          hostname: "api.anthropic.com",
-          path: "/v1/messages",
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "content-length": Buffer.byteLength(body),
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (c: Buffer) => chunks.push(c));
-          res.on("end", () => {
-            const text = Buffer.concat(chunks).toString("utf8");
-            try {
-              const parsed = JSON.parse(text) as { content?: Array<{ text: string }> };
-              resolve(parsed.content?.[0]?.text ?? "");
-            } catch { resolve(""); }
-          });
-        },
-      );
-      req.on("error", reject);
-      req.write(body);
-      req.end();
-    });
+    const raw = await callClaude(prompt, opts, 256);
 
     const arrMatch = raw.match(/\[[\d,\s]+\]/);
     if (arrMatch) {
