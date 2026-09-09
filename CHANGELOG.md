@@ -87,6 +87,44 @@ since 1.0.0, guarantees a stable MCP tool / CLI surface across the 1.x line.
 
 ---
 
+## [Unreleased]
+
+### Changed — the health score is size-independent
+
+Every lever in `ast-map report` / `get_codebase_report` was a raw count against a
+fixed cap, so the same code scored differently purely by project size. On this
+repo (73 files) four of the six levers sat at their cap: dead exports 20/20,
+complexity 28/28, god nodes 12/12, SDP 10/10. Past a cap, a real improvement
+moves the score by nothing — 29 new assertions covering two previously untested
+shipped features changed it by zero points — and the number stops carrying
+information.
+
+Each lever is now a ratio against a size-appropriate denominator, with the same
+six levers and the same weights:
+
+| lever | was | now |
+|---|---|---|
+| dead exports | `count * 1.5` | share of *exported symbols* that are dead |
+| cycles | `count * 6` | share of *files* in a cycle |
+| complexity | `veryHigh*4 + high` | the same, over *total function count* |
+| god nodes | symbols with `Ca >= 8` | `Ca >= max(5, 25% of files)`, as a share of files |
+| SDP violations | `count` | violations as a share of *import edges* |
+| test reach | unchanged | unchanged (already a ratio) |
+
+The god-node rule also gained an absolute floor: two importers in an eight-file
+project is not a god node, and without the floor small projects lost the full 12
+points for having any shared symbol at all.
+
+`ReportData.scoreBreakdown` is new — points lost per lever, summing to
+`100 - score`. `ast-map report` prints it under the grade, because a score with
+no breakdown is a number to argue with rather than act on.
+
+**Scores will move, mostly up** (this repo: 26 -> 60). If you ratchet on
+`minScore` or a committed `.ast-map.baseline.json`, re-anchor it once with
+`ast-map check <dir> --update-baseline`.
+
+---
+
 ## [2.0.1] — 2026-06-21 · patch
 
 - **fix:** add `prepare` script so `dist/` is built automatically on `npm install` (cloners no longer need a separate `npm run build`)

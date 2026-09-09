@@ -11,6 +11,16 @@ import type { SkeletonFile } from "./types.js";
 import { mapTestCoverage, isTestFile, isFixtureFile, type UntestedSource } from "./testmap.js";
 import type { HistoryEntry } from "./history.js";
 
+/** Points lost per lever, so a score can be explained rather than just reported. */
+export interface ScoreBreakdown {
+  dead: number;
+  cycles: number;
+  complexity: number;
+  godNodes: number;
+  layers: number;
+  coverage: number;
+}
+
 export interface ReportData {
   project: string;
   generatedAt: string;
@@ -20,6 +30,8 @@ export interface ReportData {
   languages: { lang: string; files: number }[];
   score: number;
   grade: string;
+  /** Points deducted per lever. Sums to 100 - score. */
+  scoreBreakdown: ScoreBreakdown;
   dead: { count: number; items: { file: string; symbol: string; kind: string }[] };
   cycles: { count: number; items: string[][] };
   godNodes: { symbol: string; file: string; importCount: number }[];
@@ -42,6 +54,19 @@ export interface ReportData {
     /** True when test files were pulled in from the project root (scan dir had none). */
     rootFallback: boolean;
   };
+}
+
+/** Total exported symbols across the scan — the denominator for dead exports. */
+function countExported(skeletons: SkeletonFile[]): number {
+  let n = 0;
+  const walk = (syms: SkeletonFile["symbols"]) => {
+    for (const s of syms) {
+      if (s.exported) n++;
+      if (s.children.length > 0) walk(s.children);
+    }
+  };
+  for (const skel of skeletons) walk(skel.symbols);
+  return n;
 }
 
 function gradeFor(score: number): string {
@@ -114,18 +139,54 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
   const veryHigh = hotspots.filter((f) => f.complexity > 20).length;
   const high = hotspots.filter((f) => f.complexity > 10 && f.complexity <= 20).length;
 
-  // Health score: start at 100, subtract weighted penalties.
-  let score = 100;
-  score -= Math.min(20, dead.length * 1.5);
-  score -= Math.min(22, cycles.length * 6);
-  score -= Math.min(28, veryHigh * 4 + high * 1);
-  score -= Math.min(12, god.filter((g) => g.importCount >= 8).length * 4);
-  score -= Math.min(10, layerViolations.length);
-  // Penalise on *reach*: a source no test file names but that a tested file
-  // imports is still exercised. Scoring on coverageRatio punished every
-  // integration-style suite for the naming heuristic rather than a real gap.
-  score -= Math.min(8, Math.round((1 - cov.reachRatio) * 8)); // structural test coverage
-  score = Math.max(0, Math.round(score));
+  // ── Health score ──────────────────────────────────────────────────────────
+  // Every lever is a *ratio*, never a raw count. Counting absolutely meant the
+  // same code scored differently purely by project size: a 70-file project
+  // maxed four of the six levers out, after which real improvements moved the
+  // score by nothing and the number stopped carrying information. The weights
+  // and the six levers are unchanged — only what each one is measured against.
+  const fileCount = Math.max(1, skeletons.length);
+  const exportedCount = Math.max(1, countExported(skeletons));
+  const functionCount = Math.max(1, hotspots.length);
+  const importEdges = Math.max(1, graph.edges.filter((e) => e.edgeType === "imports").length);
+
+  /** Penalty for `ratio`, reaching the full weight at `worst`. */
+  const lever = (ratio: number, worst: number, weight: number) =>
+    Math.min(weight, (Math.max(0, ratio) / worst) * weight);
+
+  // A "god node" is relative too: being imported by 20 files is unremarkable in
+  // a 400-file project and dominant in a 40-file one. The absolute floor stops
+  // a handful of files from making every shared symbol look load-bearing —
+  // in an 8-file project, two importers is not a god node.
+  const godThreshold = Math.max(5, fileCount * 0.25);
+  const godNodes = getTopSymbols(graph, 25).filter((g) => g.importCount >= godThreshold);
+
+  const breakdown: ScoreBreakdown = {
+    // 15% of exports unreferenced is a thoroughly dead codebase.
+    dead: lever(dead.length / exportedCount, 0.15, 20),
+    // Any cycle hurts; 5% of files tangled is as bad as it needs to get.
+    cycles: lever(cycles.length / fileCount, 0.05, 22),
+    // A very-high function (cx > 20) counts four times a high one (11-20), the
+    // same relative weighting as before. `high` is common in real code, so the
+    // worst case is set where a codebase is genuinely dominated by complexity:
+    // ~10% of functions very-high, or the equivalent traded against `high`.
+    complexity: lever((veryHigh * 4 + high) / functionCount, 0.4, 28),
+    // A quarter of files depending on one symbol, for a quarter of symbols.
+    godNodes: lever(godNodes.length / fileCount, 0.05, 12),
+    // Violations against the import edges that could have been violations.
+    layers: lever(layerViolations.length / importEdges, 0.1, 10),
+    // Penalise on *reach*: a source no test file names but that a tested file
+    // imports is still exercised. Scoring on coverageRatio punished every
+    // integration-style suite for the naming heuristic rather than a real gap.
+    coverage: lever(1 - cov.reachRatio, 1, 8),
+  };
+  const score = Math.max(
+    0,
+    Math.round(100 - Object.values(breakdown).reduce((a, b) => a + b, 0)),
+  );
+  for (const k of Object.keys(breakdown) as (keyof ScoreBreakdown)[]) {
+    breakdown[k] = Math.round(breakdown[k] * 10) / 10;
+  }
 
   const languages = [...langCount.entries()]
     .map(([lang, f]) => ({ lang, files: f }))
@@ -140,6 +201,7 @@ export async function buildReport(absDir: string, root: string): Promise<ReportD
     languages,
     score,
     grade: gradeFor(score),
+    scoreBreakdown: breakdown,
     dead: { count: dead.length, items: dead.slice(0, 25).map((d) => ({ file: d.file, symbol: d.symbol, kind: d.kind })) },
     cycles: { count: cycles.length, items: cycles.slice(0, 12).map((c) => c.cycle) },
     godNodes: god.map((g) => ({ symbol: g.symbol, file: g.file, importCount: g.importCount })),

@@ -857,6 +857,15 @@ program
     header(`Code Health \u2014 ${rel}/  ${dim(`(${data.fileCount} files)`)}`);
     const gcolor = data.grade === "A" || data.grade === "B" ? green : data.grade === "C" || data.grade === "D" ? yellow : (x: string) => x;
     console.log(indent(`Grade ${bold(gcolor(data.grade))}  ${dim("(" + data.score + "/100)")}  ·  ${data.dead.count} dead · ${data.cycles.count} cycles · max cx ${data.complexity.max} · tests ${Math.round(data.testCoverage.reachRatio * 100)}% reached`));
+    // A score with no breakdown is a number to argue with, not act on.
+    const lost = Object.entries(data.scoreBreakdown)
+      .filter(([, v]) => v >= 0.1)
+      .sort((a, b) => b[1] - a[1]);
+    if (lost.length > 0) {
+      console.log(indent(dim("points lost:  ") + lost.map(([k, v]) => `${k} ${red("-" + v)}`).join(dim("  ·  "))));
+    } else {
+      console.log(indent(dim("points lost:  ") + green("nothing")));
+    }
     console.log(indent(green("✓ wrote " + path.relative(process.cwd(), out))));
     console.log();
   });

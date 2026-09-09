@@ -425,6 +425,52 @@ console.log("\n=== Symbol Search ===");
   check("report exposes both coverage numbers",
     typeof data.testCoverage.reachRatio === "number" && data.testCoverage.reachRatio >= data.testCoverage.coverageRatio);
 
+  // ── Score breakdown ───────────────────────────────────────────────────────
+  // The score used to be built from raw counts, so a mid-size project maxed
+  // four of the six levers out and further improvement moved it by nothing.
+  // Every lever is a ratio now; these pin that down.
+  const CAPS = { dead: 20, cycles: 22, complexity: 28, godNodes: 12, layers: 10, coverage: 8 };
+  const bd = data.scoreBreakdown;
+  check("report exposes a per-lever breakdown", bd && Object.keys(CAPS).every((k) => typeof bd[k] === "number"));
+  check("breakdown sums to 100 - score",
+    Math.abs(100 - Object.values(bd).reduce((a, b) => a + b, 0) - data.score) <= 0.6,
+    `sum=${Object.values(bd).reduce((a, b) => a + b, 0)} score=${data.score}`);
+  check("no lever exceeds its cap",
+    Object.entries(bd).every(([k, v]) => v <= CAPS[k] + 1e-9), JSON.stringify(bd));
+  check("no lever is negative", Object.values(bd).every((v) => v >= 0), JSON.stringify(bd));
+  check("score stays inside 0..100", data.score >= 0 && data.score <= 100);
+
+  // Size-independence — the property the old raw-count formula lacked. Two trees
+  // of the same *shape* at different sizes must score the same: scaling the file
+  // count scales every numerator with it, so every ratio holds.
+  {
+    const fsx = await import("node:fs");
+    const osx = await import("node:os");
+    const build = async (copies) => {
+      const dir = fsx.mkdtempSync(path.join(osx.tmpdir(), `score-${copies}-`));
+      for (let i = 0; i < copies; i++) {
+        fsx.writeFileSync(path.join(dir, `core${i}.ts`), `export function core${i}() { return ${i}; }
+`);
+        fsx.writeFileSync(path.join(dir, `use${i}.ts`),
+          `import { core${i} } from "./core${i}.js";
+export function use${i}() { return core${i}(); }
+export const DEAD${i} = ${i};
+`);
+      }
+      const r = await buildReport(dir, dir);
+      fsx.rmSync(dir, { recursive: true, force: true });
+      return r;
+    };
+    const small = await build(4);
+    const large = await build(20);
+    check("the same shape at 5x the size scores the same",
+      Math.abs(small.score - large.score) <= 2,
+      `4 copies=${small.score} (${small.fileCount} files), 20 copies=${large.score} (${large.fileCount} files)`);
+    check("and lever-by-lever, not just in total",
+      Object.keys(CAPS).every((k) => Math.abs(small.scoreBreakdown[k] - large.scoreBreakdown[k]) <= 2),
+      `${JSON.stringify(small.scoreBreakdown)} vs ${JSON.stringify(large.scoreBreakdown)}`);
+  }
+
   // Root fallback: report on src/ only — tests live under the root's tests/ dir.
   const TM = path.join(__dirname, "fixtures", "testmap");
   const tmReport = await buildReport(path.join(TM, "src"), TM);
