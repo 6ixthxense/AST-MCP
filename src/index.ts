@@ -587,8 +587,11 @@ server.registerTool(
       "Use this for the architectural bird's-eye view; use `coupling` to find the individual load-bearing file.\n" +
       "• `layers` — Stable Dependencies Principle breaks: a stable file importing a more volatile one. " +
       "`minGap` (0-1) filters by how far uphill the dependency points.\n" +
-      "• `tests` — which sources have tests (by import or naming convention) and which do not, " +
-      "untested ranked by risk. File-level, not line coverage. `untestedOnly` trims the response.\n" +
+      "• `tests` — two numbers: `coverageRatio` counts sources a test *names* (imports directly or " +
+      "matches by filename), `reachRatio` also counts what those files import transitively — use the " +
+      "second for integration-style suites, which exercise far more than they name. `untested` means " +
+      "neither, and is the list worth acting on, ranked by risk. Neither number is line coverage. " +
+      "`untestedOnly` trims the lists but keeps both ratios.\n" +
       "• `complexity` — cyclomatic complexity per function plus the worst hotspots. Accepts a single FILE.\n" +
       "• `unused-params` — declared parameters never referenced in the body. Accepts a single FILE.\n" +
       "• `risk` — git churn × complexity, ranking the files most worth refactoring or testing. Needs a git repo.\n" +
@@ -677,8 +680,17 @@ server.registerTool(
         case "tests": {
           const g = await graphOf();
           const map = mapTestCoverage(g.graph);
+          // untestedOnly trims the lists, never the headline numbers — dropping
+          // reachRatio here would leave only the number that reads too low.
           return jsonText(untestedOnly
-            ? { ...scanned(g), untestedSources: map.untestedSources, coverageRatio: map.coverageRatio, untested: map.untested }
+            ? {
+                ...scanned(g),
+                untestedSources: map.untestedSources,
+                coverageRatio: map.coverageRatio,
+                reachedSources: map.reachedSources,
+                reachRatio: map.reachRatio,
+                untested: map.untested,
+              }
             : { ...scanned(g), ...map });
         }
         case "complexity": {

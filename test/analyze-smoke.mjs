@@ -112,6 +112,17 @@ console.log("\nanalyze — guards");
   const limited = res.find((x) => x.id === 202);
   check("top honours limit",
     JSON.parse(limited.result.content[0].text).topSymbols.length <= 2);
+
+  // untestedOnly trims the lists, not the headline numbers: dropping reachRatio
+  // would leave callers only the figure that reads too low.
+  const [trimmed] = (await rpc([...handshake,
+    { jsonrpc: "2.0", id: 203, method: "tools/call", params: { name: "analyze", arguments: { kind: "tests", path: ".", untestedOnly: true } } },
+  ])).filter((x) => x.id === 203);
+  const t = JSON.parse(trimmed.result.content[0].text);
+  check("untestedOnly keeps both coverage ratios",
+    typeof t.coverageRatio === "number" && typeof t.reachRatio === "number" && t.reachRatio >= t.coverageRatio,
+    JSON.stringify({ coverageRatio: t.coverageRatio, reachRatio: t.reachRatio }));
+  check("untestedOnly still trims the lists", t.links === undefined && t.reached === undefined);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASSED ✅" : failures + " FAILURE(S) ❌"}`);
